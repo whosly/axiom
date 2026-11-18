@@ -1,0 +1,79 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: data-analysis-agent
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  jackson:
+    default-property-inclusion: non_null
+    date-format: yyyy-MM-dd'T'HH:mm:ss
+
+app:
+  storage:
+    # 所有数据统一放在 data 下，每种存储一个子目录 / All data under data/, one subdirectory per store
+    # data/h2/          -> H2 元数据 / H2 metadata
+    # data/duckdb/      -> DuckDB 分析库 / DuckDB analytics
+    # data/zvec/        -> Zvec 向量库（两个 collection）/ Zvec vectors (two collections)
+    data-dir: ${DATA_DIR:./data}
+    duckdb-path: ${DUCKDB_PATH:./data/duckdb/analysis.duckdb}
+    # h2 | sqlite
+    metadata-type: ${METADATA_TYPE:h2}
+    h2-url: ${H2_URL:jdbc:h2:file:./data/h2/metadata;AUTO_SERVER=TRUE}
+    sqlite-url: ${SQLITE_URL:jdbc:sqlite:./data/sqlite/metadata.db}
+    username: ${DB_USER:sa}
+    password: ${DB_PASSWORD:}
+
+  zvec:
+    enabled: ${ZVEC_ENABLED:true}
+    path: ${ZVEC_PATH:./data/zvec/dataset_semantics}
+    # 向量维度需与 embedding 模型一致（bge-small-zh-v1.5 = 512）
+    dimension: ${ZVEC_DIMENSION:512}
+    collection: dataset_semantics
+    # 知识库独立 collection / Dedicated collection for knowledge base
+    knowledge-path: ${ZVEC_KNOWLEDGE_PATH:./data/zvec/knowledge_base}
+    knowledge-collection: knowledge_base
+
+  llm:
+    # Strategy selector: deepseek (only implemented provider for now)
+    provider: ${LLM_PROVIDER:deepseek}
+    deepseek:
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${DEEPSEEK_API_KEY:}
+      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      reasoner-model: ${DEEPSEEK_REASONER_MODEL:deepseek-reasoner}
+      temperature: ${DEEPSEEK_TEMPERATURE:0.1}
+      max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
+    # 兼容保留：api embedding 的旧配置（仅当 embedding.provider=api 时使用）
+    embedding:
+      base-url: ${EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
+      api-key: ${EMBEDDING_API_KEY:}
+      model: ${EMBEDDING_MODEL:BAAI/bge-m3}
+      dimension: ${EMBEDDING_DIMENSION:512}
+
+  # Embedding 策略：默认本地 ONNX，零外部依赖 / Default local ONNX, zero external dependency
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:local}
+    local:
+      model-path: ${EMBEDDING_MODEL_PATH:./data/models/bge-small-zh-v1.5/model.onnx}
+      vocab-path: ${EMBEDDING_VOCAB_PATH:./data/models/bge-small-zh-v1.5/vocab.txt}
+      dimension: 512
+      max-length: 512
+      threads: ${EMBEDDING_THREADS:2}
+
+  # 重排序配置 / Rerank configuration
+  rerank:
+    # auto | llm | rule ; auto 时按是否有 API Key 自动选择
+    provider: ${RERANK_PROVIDER:auto}
+    enabled: ${RERANK_ENABLED:true}
+    # 重排候选数（先召回 topN 再重排）/ Candidates to recall before rerank
+    candidate-size: ${RERANK_CANDIDATE_SIZE:20}
+
+logging:
+  level:
+    com.dataagent: INFO
+    org.springframework.web: WARN

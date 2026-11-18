@@ -1,0 +1,436 @@
+package com.dataagent.service;
+
+import com.dataagent.model.AnalysisPlan;
+import com.dataagent.model.AnalysisResult;
+import com.dataagent.model.Dataset;
+import com.dataagent.model.KnowledgeDetail;
+import com.dataagent.model.KnowledgeEntry;
+import com.dataagent.model.KnowledgeRequest;
+import com.dataagent.repository.KnowledgeRepository;
+import com.dataagent.repository.MetadataRepository;
+import com.dataagent.config.AppProperties;
+import com.dataagent.rerank.RerankService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.*;
+
+/**
+ * 知识库统一服务 / Unified knowledge base service.
+ *
+ * <p>作为知识库的门面（Facade），编排三类知识来源：
+ * Acts as the facade of the knowledge base, orchestrating three knowledge sources:
+ * <ol>
+ *   <li>手动录入：指标口径、术语、模板 / Manual entry: metrics, glossary, recipes</li>
+ *   <li>分析历史：从过往分析中沉淀 / Analysis history: distilled from past analyses</li>
+ *   <li>（后续）文档：PDF/Word/MD 分块 / Documents: PDF/Word/MD chunks (future)</li>
+ * </ol>
+ *
+ * <p>所有来源都归一化为 KnowledgeEntry，共享 KnowledgeRepository（元数据）和
+ * KnowledgeVectorStore（向量）两层。/ All sources are normalized to KnowledgeEntry and
+ * share the metadata and vector layers.
+ */
+@Slf4j
+@Service
+public class KnowledgeService {
+
+    private final KnowledgeRepository repository;
+    private final KnowledgeVectorStore vectorStore;
+    private final MetadataRepository metadataRepository;
+    private final KnowledgeTokenizer tokenizer;
+    private final AppProperties props;
+    private final RerankService rerankService;
+
+    public KnowledgeService(KnowledgeRepository repository, KnowledgeVectorStore vectorStore,
+                            MetadataRepository metadataRepository, KnowledgeTokenizer tokenizer,
+                            AppProperties props, RerankService rerankService) {
+        this.repository = repository;
+        this.vectorStore = vectorStore;
+        this.metadataRepository = metadataRepository;
+        this.tokenizer = tokenizer;
+        this.props = props;
+        this.rerankService = rerankService;
+    }
+
+    /**
+     * 手动录入一条知识 / Add a knowledge entry manually.
+     *
+     * <p>内容哈希去重：相同内容重复录入时直接返回已有条目，保证幂等。
+     * Content-hash dedup: re-adding identical content returns the existing entry (idempotent).
+     *
+     * @param req 录入请求 / The creation request.
+     * @return 已入库的知识条目 / The persisted knowledge entry.
+     */
+    public KnowledgeEntry add(KnowledgeRequest req) {
+        String content = req.getContent() == null ? "" : req.getContent();
+        String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
+
+        if (repository.existsByHash(hash)) {
+            log.info("[Knowledge] duplicate content, skip: {}", req.getTitle());
+            // 返回同哈希的已有条目 / Return the existing entry with the same hash.
+            return repository.listAll().stream()
+                    .filter(e -> hash.equals(e.getTextHash()))
+                    .findFirst().orElse(null);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        KnowledgeEntry entry = KnowledgeEntry.builder()
+                .id(UUID.randomUUID().toString())
+                .kind(req.getKind() == null ? "glossary" : req.getKind())
+                .title(req.getTitle())
+                .content(content)
+                .formula(req.getFormula())
+                .fields(req.getFields())
+                .tags(req.getTags())
+                .sourceType("manual")
+                .sourceId("manual-" + UUID.randomUUID())
+                .datasetId(req.getDatasetId())
+                .textHash(hash)
+                .status("pending")
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+
+        persistWithVector(entry);
+        log.info("[Knowledge] added entry {} kind={}", entry.getId(), entry.getKind());
+        return entry;
+    }
+
+    /**
+     * 双写持久化：元数据先落地（pending），再写向量，按结果更新状态。
+     * Dual-write persistence: persist metadata first (pending), then vector, then update status.
+     *
+     * <p>状态机 / State machine:
+     * <pre>
+     *   pending --向量成功--> ready
+     *   pending --向量失败--> vector_failed --reindex--> pending --> ready
+     * </pre>
+     * 这样即使 Embedding 服务不可用，元数据也不丢，后续可重建。
+     * / Even if the embedding service is down, metadata is kept and can be reindexed later.
+     *
+     * @param entry 知识条目 / Knowledge entry.
+     * @return 向量是否写入成功 / Whether the vector write succeeded.
+     */
+    private boolean persistWithVector(KnowledgeEntry entry) {
+        // 1. 元数据先写，状态 pending / Persist metadata first with pending status.
+        repository.save(entry);
+        // 1b. 构建倒排索引（供降级检索）/ Build inverted index (for fallback search).
+        java.util.List<String> tokens = tokenizer.tokenize(entry.getTitle() + " " + entry.getContent());
+        repository.indexTerms(entry.getId(), tokens);
+        // 2. 写向量 / Write vector.
+        boolean ok = vectorStore.upsertWithResult(entry);
+        // 3. 按结果更新状态 / Update status by result.
+        String finalStatus = ok ? "ready" : "vector_failed";
+        repository.updateStatus(entry.getId(), finalStatus);
+        entry.setStatus(finalStatus);
+        return ok;
+    }
+
+    /**
+     * 从一次分析沉淀知识 / Distill knowledge from a completed analysis.
+     *
+     * <p>把「问题 + 计划 + 结论」作为一条 case 入库，供后续相似问题 few-shot 检索。
+     * Stores "question + plan + conclusion" as a case for few-shot retrieval of similar questions.
+     *
+     * @param dataset   数据集 / The dataset.
+     * @param question  用户问题 / User question.
+     * @param plan      分析计划 / Analysis plan.
+     * @param result    分析结果 / Analysis result.
+     */
+    public void addFromAnalysis(Dataset dataset, String question, AnalysisPlan plan, AnalysisResult result) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("问题: ").append(question).append("\n");
+        sb.append("意图: ").append(plan.getIntent()).append("\n");
+        if (plan.getMetrics() != null) sb.append("指标: ").append(String.join(",", plan.getMetrics())).append("\n");
+        if (plan.getDimension() != null) sb.append("维度: ").append(plan.getDimension()).append("\n");
+        sb.append("结论: ").append(result.getConclusion() == null ? "" : result.getConclusion());
+
+        LocalDateTime now = LocalDateTime.now();
+        KnowledgeEntry entry = KnowledgeEntry.builder()
+                .id(UUID.randomUUID().toString())
+                .kind("case")
+                .title(question.length() > 60 ? question.substring(0, 60) + "..." : question)
+                .content(sb.toString())
+                .sourceType("analysis")
+                .sourceId("analysis-" + dataset.getId())
+                .datasetId(dataset.getId())
+                .tags(List.of(plan.getIntent().getValue()))
+                .textHash(sha256(sb.toString()))
+                .status("pending")
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+
+        persistWithVector(entry);
+        log.info("[Knowledge] distilled case from analysis: {}", entry.getId());
+    }
+
+    /**
+     * 混合检索知识 / Hybrid-search knowledge.
+     *
+     * @param query     查询文本 / Query text.
+     * @param kind      类型过滤（可空）/ Kind filter (nullable).
+     * @param datasetId 数据集过滤（可空）/ Dataset filter (nullable).
+     * @param topK      返回条数 / Result count.
+     * @return 命中列表 / List of hits.
+     */
+    public List<KnowledgeVectorStore.Hit> search(String query, String kind, String datasetId, int topK) {
+        List<KnowledgeVectorStore.Hit> candidates = List.of();
+        if (vectorStore.isReady()) {
+            // 先召回更多候选，供 rerank 精排 / Recall more candidates for rerank to refine.
+            int candidateSize = Math.max(topK, props.getRerank().getCandidateSize());
+            candidates = vectorStore.hybridSearch(query, kind, datasetId, candidateSize);
+        }
+        if (candidates.isEmpty()) {
+            // 向量检索无结果时降级为倒排索引关键词匹配 / Fall back to inverted-index keyword search.
+            log.debug("[Knowledge] vector search returned no hits, trying keyword fallback");
+            candidates = keywordFallback(query, kind, Math.max(topK, props.getRerank().getCandidateSize()));
+        }
+        // 重排精排 / Rerank refinement.
+        return rerankService.rerank(query, candidates, topK);
+    }
+
+    /**
+     * 检索供 LLM 使用的知识上下文 / Retrieve knowledge context for LLM prompts.
+     *
+     * <p>返回格式化文本，直接拼入 Plan/Conclude 的 prompt。
+     * Returns formatted text to be appended into Plan/Conclude prompts.
+     *
+     * @param question  用户问题 / User question.
+     * @param datasetId 数据集 ID / Dataset ID.
+     * @return 知识上下文文本（可能为空）/ Knowledge context text (possibly empty).
+     */
+    public String retrieveContext(String question, String datasetId) {
+        List<KnowledgeVectorStore.Hit> hits = search(question, null, datasetId, 5);
+        if (hits.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("以下是知识库中与问题相关的知识（请优先参考，不要编造）：\n");
+        sb.append("Relevant knowledge from the knowledge base (prioritize these, do not fabricate):\n");
+        for (int i = 0; i < hits.size(); i++) {
+            KnowledgeVectorStore.Hit h = hits.get(i);
+            sb.append("[").append(i + 1).append("] [").append(h.getKind()).append("] ")
+                    .append(h.getTitle() == null ? "" : h.getTitle()).append(": ")
+                    .append(h.getContent()).append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 元数据关键词降级检索 / Keyword fallback search on metadata.
+     *
+     * <p>向量库不可用时的兜底：简单的包含匹配，保证服务不中断。
+     * Fallback when vector store is down: simple substring match to keep the service alive.
+     */
+    private List<KnowledgeVectorStore.Hit> keywordFallback(String query, String kind, int topK) {
+        // 用倒排索引检索，命中数即相关性分数，避免全表扫描 / Search via inverted index;
+        // hit count acts as relevance score, avoiding full-table scans.
+        List<String> terms = tokenizer.tokenize(query);
+        List<Map<String, Object>> ranked = repository.searchByTerms(terms, topK);
+        List<KnowledgeVectorStore.Hit> hits = new ArrayList<>();
+        for (Map<String, Object> row : ranked) {
+            String entryId = String.valueOf(mapValue(row, "entry_id"));
+            KnowledgeEntry e = repository.findById(entryId);
+            if (e == null) continue;
+            if (kind != null && !kind.isBlank() && !kind.equals(e.getKind())) continue;
+            Object hitsObj = mapValue(row, "hits");
+            long hitsCount = hitsObj instanceof Number n ? n.longValue() : 0;
+            // 分数归一化：命中越多分越高，上限 1.0 / Normalize score by hit count, capped at 1.0.
+            float score = (float) Math.min(1.0, hitsCount / (double) Math.max(terms.size(), 1));
+            hits.add(new KnowledgeVectorStore.Hit(e.getId(), e.getKind(), e.getTitle(),
+                    e.getContent(), e.getSourceId(), score));
+        }
+        // 兼容旧数据：倒排索引未覆盖时，退回子串匹配 / Backward compatibility: fall back to
+        // substring match when inverted index has no data (e.g. legacy entries).
+        if (hits.isEmpty()) {
+            List<KnowledgeEntry> entries = kind == null ? repository.listAll() : repository.listByKind(kind);
+            for (KnowledgeEntry e : entries) {
+                String hay = (e.getTitle() == null ? "" : e.getTitle()) + " " + (e.getContent() == null ? "" : e.getContent());
+                if (hay.contains(query)) {
+                    hits.add(new KnowledgeVectorStore.Hit(e.getId(), e.getKind(), e.getTitle(),
+                            e.getContent(), e.getSourceId(), 1.0f));
+                }
+                if (hits.size() >= topK) break;
+            }
+        }
+        return hits;
+    }
+
+    /**
+     * 获取知识条目完整详情 / Get full detail of a knowledge entry.
+     *
+     * <p>聚合四层信息：/ Aggregates four layers of information:
+     * <ol>
+     *   <li>元数据（H2 中的结构化字段）/ Metadata (structured fields in H2)</li>
+     *   <li>向量状态（Zvec 中是否真正写入）/ Vector status (whether actually written to Zvec)</li>
+     *   <li>溯源（来源数据集、来源类型）/ Traceability (source dataset and type)</li>
+     *   <li>处理链路（从原始输入到入库的步骤）/ Processing lineage (steps from raw input to storage)</li>
+     * </ol>
+     *
+     * @param id 知识条目 ID / Knowledge entry ID.
+     * @return 详情对象，不存在时返回 null / Detail object, null if not found.
+     */
+    public KnowledgeDetail getDetail(String id) {
+        KnowledgeEntry e = repository.findById(id);
+        if (e == null) return null;
+
+        KnowledgeDetail detail = new KnowledgeDetail();
+        detail.setEntry(e);
+        detail.setVector(vectorStore.vectorStatus(id));
+
+        // 溯源：根据来源类型生成可读描述 / Traceability: readable description by source type.
+        String sourceType = e.getSourceType() == null ? "" : e.getSourceType();
+        String sourceLabel = switch (sourceType) {
+            case "manual" -> "手动录入 / Manual entry";
+            case "analysis" -> "分析沉淀 / Distilled from analysis";
+            case "document" -> "文档解析 / Document parsing";
+            case "import" -> "批量导入 / Bulk import";
+            default -> sourceType;
+        };
+        detail.setSourceLabel(sourceLabel);
+
+        // 关联数据集名称 / Associated dataset name.
+        if (e.getDatasetId() != null && !e.getDatasetId().isBlank()) {
+            Dataset ds = metadataRepository.getDataset(e.getDatasetId());
+            detail.setDatasetName(ds == null ? e.getDatasetId() : ds.getName());
+        } else {
+            detail.setDatasetName("全局知识 / Global");
+        }
+
+        detail.setLineage(buildLineage(e));
+        detail.setStorage(Map.of(
+                "metadata", "H2/SQLite: knowledge_entries 表 / table",
+                "vector", "Zvec: knowledge_base collection",
+                "vectorId", e.getId()));
+        return detail;
+    }
+
+    /**
+     * 构造处理链路 / Build the processing lineage.
+     *
+     * <p>链路描述这条知识经历的每一步，让管理员能理解数据是如何被加工的。
+     * / The lineage describes every step the knowledge went through, so admins can
+     * understand how the data was processed.
+     */
+    private List<Map<String, String>> buildLineage(KnowledgeEntry e) {
+        List<Map<String, String>> steps = new ArrayList<>();
+        String sourceType = e.getSourceType() == null ? "" : e.getSourceType();
+
+        // 步骤 1：来源 / Step 1: source.
+        steps.add(step("1", "来源采集 / Source",
+                switch (sourceType) {
+                    case "manual" -> "用户在管理页手动输入 / User typed in the management page";
+                    case "analysis" -> "对话分析完成后自动沉淀 / Auto-distilled after a chat analysis";
+                    case "document" -> "文档解析分块 / Document parsed and chunked";
+                    default -> "未知来源 / Unknown source";
+                }));
+
+        // 步骤 2：归一化 / Step 2: normalization.
+        steps.add(step("2", "归一化 / Normalize",
+                "映射为统一 KnowledgeEntry 结构，计算 SHA-256 去重 / Mapped to KnowledgeEntry, SHA-256 dedup computed"));
+
+        // 步骤 3：元数据入库 / Step 3: metadata persistence.
+        steps.add(step("3", "元数据入库 / Metadata",
+                "写入 knowledge_entries 表（状态=" + e.getStatus() + "）/ Written to knowledge_entries table"));
+
+        // 步骤 4：向量化 / Step 4: embedding.
+        KnowledgeVectorStore.VectorStatus vs = vectorStore.vectorStatus(e.getId());
+        steps.add(step("4", "向量化 / Embedding",
+                vs.isPresent()
+                        ? "已生成 " + vs.getDimension() + " 维向量并写入 Zvec / Vector embedded and stored in Zvec"
+                        : "向量缺失（可能未配置 Embedding API）/ Vector missing (embedding API may be unconfigured)"));
+
+        // 步骤 5：可检索 / Step 5: retrievable.
+        steps.add(step("5", "可检索 / Retrieval",
+                "混合检索：向量 + 全文 + RRF 融合 / Hybrid: vector + full-text + RRF fusion"));
+        return steps;
+    }
+
+    /** 构造一个链路步骤 / Build a lineage step. */
+    private Map<String, String> step(String num, String stage, String detail) {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("step", num);
+        m.put("stage", stage);
+        m.put("detail", detail);
+        return m;
+    }
+
+    /** 列出全部知识条目 / List all entries. */
+    public List<KnowledgeEntry> listAll() { return repository.listAll(); }
+
+    /** 按类型列出 / List by kind. */
+    public List<KnowledgeEntry> listByKind(String kind) { return repository.listByKind(kind); }
+
+    /** 类型统计 / Statistics grouped by kind. */
+    public List<Map<String, Object>> stats() { return repository.stats(); }
+
+    /** 状态统计（双写一致性监控）/ Status statistics for dual-write monitoring. */
+    public List<Map<String, Object>> statusStats() { return repository.statusStats(); }
+
+    /**
+     * 重建向量索引（双写一致性修复）/ Rebuild vector index (dual-write consistency repair).
+     *
+     * <p>扫描所有 pending/vector_failed 的条目重新向量化；也可 force=true 强制重建全部。
+     * / Scans all pending/vector_failed entries and re-embeds them; force=true rebuilds everything.
+     *
+     * @param force 是否强制重建全部 / Whether to force-rebuild all entries.
+     * @return 重建结果统计 / Rebuild result statistics.
+     */
+    public Map<String, Object> reindex(boolean force) {
+        List<KnowledgeEntry> targets = force ? repository.listAll() : repository.listPendingVector();
+        int success = 0, failed = 0;
+        for (KnowledgeEntry e : targets) {
+            // 重建倒排索引 / Rebuild inverted index.
+            repository.indexTerms(e.getId(), tokenizer.tokenize(e.getTitle() + " " + e.getContent()));
+            // 先标记 pending / Mark as pending first.
+            repository.updateStatus(e.getId(), "pending");
+            boolean ok = vectorStore.upsertWithResult(e);
+            repository.updateStatus(e.getId(), ok ? "ready" : "vector_failed");
+            if (ok) success++; else failed++;
+        }
+        log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);
+        return Map.of("total", targets.size(), "success", success, "failed", failed);
+    }
+
+    /** 删除一条知识（同时删向量）/ Delete an entry (vector included). */
+    public void delete(String id) {
+        repository.delete(id);
+        vectorStore.delete(id);
+    }
+
+    /** 按来源删除 / Delete by source ID. */
+    public int deleteBySource(String sourceId) {
+        List<String> ids = repository.deleteBySource(sourceId);
+        vectorStore.deleteBySource(sourceId);
+        return ids.size();
+    }
+
+    /**
+     * 不区分大小写读取 Map 值 / Case-insensitive map lookup.
+     * H2 返回大写列名，SQLite 返回原样，需兼容 / H2 returns uppercase keys, SQLite preserves case.
+     */
+    private Object mapValue(Map<String, Object> row, String key) {
+        Object v = row.get(key);
+        if (v != null) return v;
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(key)) return e.getValue();
+        }
+        return null;
+    }
+
+    /** 计算 SHA-256 哈希 / Compute SHA-256 hash. */
+    private String sha256(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return UUID.randomUUID().toString();
+        }
+    }
+}
