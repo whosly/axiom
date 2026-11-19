@@ -109,6 +109,8 @@ java -jar target/data-analysis-agent-1.0.0.jar
 ## 文档
 
 - [知识库设计](docs/KNOWLEDGE_BASE.md)：存储、检索、双写一致性、Rerank、知识图谱
+- [知识图谱实现细节与改进方案](docs/KNOWLEDGE_GRAPH.md)：数据模型、构建流程、BFS 查询、已知限制与 GraphRAG 演进方案
+- [面试题与参考答案](docs/INTERVIEW_QUESTIONS.md)：基于本项目的 13 道面试题（架构、图谱、检索、一致性、降级、前端）
 - [本地部署](docs/LOCAL_DEPLOYMENT.md)：bge-small-zh-v1.5 ONNX 模型下载与配置
 - [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md)：枚举值对象与 period 缺陷修复
 

@@ -55,10 +55,15 @@ public class KnowledgeRepository {
                 chunk_index INTEGER DEFAULT 0,
                 text_hash VARCHAR(128),
                 status VARCHAR(16) DEFAULT 'ready',
+                version INTEGER DEFAULT 1,
+                deleted BOOLEAN DEFAULT FALSE,
                 created_at VARCHAR(64),
                 updated_at VARCHAR(64)
             )
         """);
+        // 旧库迁移：为历史表补列 / Migrate legacy tables: add missing columns.
+        try { jdbc.execute("ALTER TABLE knowledge_entries ADD COLUMN version INTEGER DEFAULT 1"); } catch (Exception ignored) {}
+        try { jdbc.execute("ALTER TABLE knowledge_entries ADD COLUMN deleted BOOLEAN DEFAULT FALSE"); } catch (Exception ignored) {}
         // 倒排索引表：用于降级检索，避免全表 contains 扫描 / Inverted index for fallback search.
         jdbc.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_terms (
@@ -85,38 +90,49 @@ public class KnowledgeRepository {
             INSERT INTO knowledge_entries (
                 id, kind, title, content, formula, fields_json, tags_json,
                 source_type, source_id, dataset_id, chunk_index, text_hash,
-                status, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                status, version, deleted, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             e.getId(), e.getKind(), e.getTitle(), e.getContent(), e.getFormula(),
             toJson(e.getFields()), toJson(e.getTags()), e.getSourceType(), e.getSourceId(),
             e.getDatasetId(), e.getChunkIndex(), e.getTextHash(), e.getStatus(),
-            str(e.getCreatedAt()), str(e.getUpdatedAt()));
+            e.getVersion(), e.isDeleted(), str(e.getCreatedAt()), str(e.getUpdatedAt()));
     }
 
     /** 按 ID 查询 / Find by ID. */
     public KnowledgeEntry findById(String id) {
         List<KnowledgeEntry> list = jdbc.query(
+                "SELECT * FROM knowledge_entries WHERE id = ? AND (deleted IS NULL OR deleted = FALSE)",
+                this::mapRow, id);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /** 按 ID 查询（含软删除，恢复用）/ Find by ID including soft-deleted (for restore). */
+    public KnowledgeEntry findByIdIncludingDeleted(String id) {
+        List<KnowledgeEntry> list = jdbc.query(
                 "SELECT * FROM knowledge_entries WHERE id = ?", this::mapRow, id);
         return list.isEmpty() ? null : list.get(0);
     }
 
-    /** 列出全部条目 / List all entries. */
+    /** 列出全部条目（排除软删除）/ List all entries excluding soft-deleted. */
     public List<KnowledgeEntry> listAll() {
-        return jdbc.query("SELECT * FROM knowledge_entries ORDER BY updated_at DESC", this::mapRow);
+        return jdbc.query(
+                "SELECT * FROM knowledge_entries WHERE deleted IS NULL OR deleted = FALSE ORDER BY updated_at DESC",
+                this::mapRow);
     }
 
     /** 按类型过滤 / Filter by kind. */
     public List<KnowledgeEntry> listByKind(String kind) {
         return jdbc.query(
-                "SELECT * FROM knowledge_entries WHERE kind = ? ORDER BY updated_at DESC",
+                "SELECT * FROM knowledge_entries WHERE kind = ? AND (deleted IS NULL OR deleted = FALSE) ORDER BY updated_at DESC",
                 this::mapRow, kind);
     }
 
     /** 按来源 ID 查询（级联删除用）/ Find by source ID (for cascade deletion). */
     public List<KnowledgeEntry> listBySource(String sourceId) {
         return jdbc.query(
-                "SELECT * FROM knowledge_entries WHERE source_id = ?", this::mapRow, sourceId);
+                "SELECT * FROM knowledge_entries WHERE source_id = ? AND (deleted IS NULL OR deleted = FALSE)",
+                this::mapRow, sourceId);
     }
 
     /** 检查内容哈希是否存在（幂等去重）/ Check whether a content hash exists (idempotency). */
@@ -127,16 +143,32 @@ public class KnowledgeRepository {
         return count != null && count > 0;
     }
 
-    /** 删除条目 / Delete an entry. */
+    /**
+     * 软删除条目 / Soft-delete an entry.
+     * 数据保留但查询不可见，可恢复 / Data retained but hidden from queries, restorable.
+     */
     public void delete(String id) {
+        jdbc.update("UPDATE knowledge_entries SET deleted = TRUE, version = version + 1, updated_at = ? WHERE id = ?",
+                java.time.LocalDateTime.now().toString(), id);
+    }
+
+    /** 恢复软删除的条目 / Restore a soft-deleted entry. */
+    public void restore(String id) {
+        jdbc.update("UPDATE knowledge_entries SET deleted = FALSE, version = version + 1, updated_at = ? WHERE id = ?",
+                java.time.LocalDateTime.now().toString(), id);
+    }
+
+    /** 永久删除条目（清理用）/ Permanently delete an entry (cleanup). */
+    public void purge(String id) {
         jdbc.update("DELETE FROM knowledge_entries WHERE id = ?", id);
     }
 
-    /** 按来源级联删除，返回被删除的 ID / Cascade delete by source, returning deleted IDs. */
+    /** 按来源级联软删除，返回被删除的 ID / Cascade soft-delete by source, returning IDs. */
     public List<String> deleteBySource(String sourceId) {
         List<String> ids = jdbc.queryForList(
-                "SELECT id FROM knowledge_entries WHERE source_id = ?", String.class, sourceId);
-        jdbc.update("DELETE FROM knowledge_entries WHERE source_id = ?", sourceId);
+                "SELECT id FROM knowledge_entries WHERE source_id = ? AND (deleted IS NULL OR deleted = FALSE)",
+                String.class, sourceId);
+        for (String id : ids) delete(id);
         return ids;
     }
 
@@ -225,6 +257,8 @@ public class KnowledgeRepository {
         e.setChunkIndex(rs.getInt("chunk_index"));
         e.setTextHash(rs.getString("text_hash"));
         e.setStatus(rs.getString("status"));
+        try { e.setVersion(rs.getInt("version")); } catch (Exception ignored) { e.setVersion(1); }
+        try { e.setDeleted(rs.getBoolean("deleted")); } catch (Exception ignored) { e.setDeleted(false); }
         e.setCreatedAt(parse(rs.getString("created_at")));
         e.setUpdatedAt(parse(rs.getString("updated_at")));
         return e;

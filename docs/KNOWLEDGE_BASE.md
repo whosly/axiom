@@ -167,13 +167,22 @@ Extracts entities & relations from knowledge into two H2 tables:
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/knowledge/entry` | 录入知识 |
+| POST | `/api/knowledge/document` | 上传文档（PDF/DOCX/MD/TXT）自动分块入库 |
 | GET | `/api/knowledge` | 列表 + 类型统计 |
 | GET | `/api/knowledge/kind/{kind}` | 按类型列出 |
 | GET | `/api/knowledge/{id}/detail` | 详情：元数据+向量状态+溯源+处理链路 |
 | GET | `/api/knowledge/status` | 双写状态统计 |
 | POST | `/api/knowledge/reindex?force=` | 重建向量索引 |
 | POST | `/api/knowledge/search` | 混合检索测试（含 rerank）|
-| DELETE | `/api/knowledge/{id}` | 删除 |
+| DELETE | `/api/knowledge/{id}` | 软删除（可恢复）|
+| POST | `/api/knowledge/{id}/restore` | 恢复软删除的条目 |
+
+### 图谱自动同步 / Graph Auto-sync
+知识条目增删改通过 `KnowledgeChangedEvent` 领域事件自动触发图谱重建，无需手动 rebuild。
+/ Entry changes publish `KnowledgeChangedEvent`; the graph auto-rebuilds via `@EventListener`.
+
+### 版本与软删除 / Versioning & Soft Delete
+`knowledge_entries` 含 `version`（每次更新递增）与 `deleted`（软删除标记）列。删除只标记、查询自动过滤，可恢复。
 
 ### 知识图谱 / Graph
 | 方法 | 路径 | 说明 |

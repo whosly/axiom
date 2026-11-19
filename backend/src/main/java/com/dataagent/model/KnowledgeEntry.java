@@ -74,9 +74,17 @@ public class KnowledgeEntry {
     /** 内容哈希，用于幂等去重 / Content hash for idempotent deduplication. */
     private String textHash;
 
-    /** 入库状态：pending | ready | failed / Ingestion status: pending | ready | failed. */
+    /** 入库状态：pending | ready | vector_failed / Ingestion status. */
     @Builder.Default
     private String status = "ready";
+
+    /** 版本号，每次更新递增 / Version number, incremented on each update. */
+    @Builder.Default
+    private int version = 1;
+
+    /** 是否已软删除 / Whether the entry is soft-deleted. */
+    @Builder.Default
+    private boolean deleted = false;
 
     /** 创建时间 / Creation time. */
     @JsonProperty("createdAt")

@@ -3,14 +3,17 @@ package com.dataagent.service;
 import com.dataagent.model.AnalysisPlan;
 import com.dataagent.model.AnalysisResult;
 import com.dataagent.model.Dataset;
+import com.dataagent.model.DocumentChunkRequest;
 import com.dataagent.model.KnowledgeDetail;
 import com.dataagent.model.KnowledgeEntry;
 import com.dataagent.model.KnowledgeRequest;
 import com.dataagent.repository.KnowledgeRepository;
 import com.dataagent.repository.MetadataRepository;
 import com.dataagent.config.AppProperties;
+import com.dataagent.domain.KnowledgeChangedEvent;
 import com.dataagent.rerank.RerankService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -43,16 +46,25 @@ public class KnowledgeService {
     private final KnowledgeTokenizer tokenizer;
     private final AppProperties props;
     private final RerankService rerankService;
+    /** 领域事件发布器，用于通知图谱自动同步 / Domain event publisher for graph auto-sync. */
+    private final ApplicationEventPublisher eventPublisher;
 
     public KnowledgeService(KnowledgeRepository repository, KnowledgeVectorStore vectorStore,
                             MetadataRepository metadataRepository, KnowledgeTokenizer tokenizer,
-                            AppProperties props, RerankService rerankService) {
+                            AppProperties props, RerankService rerankService,
+                            ApplicationEventPublisher eventPublisher) {
         this.repository = repository;
         this.vectorStore = vectorStore;
         this.metadataRepository = metadataRepository;
         this.tokenizer = tokenizer;
         this.props = props;
         this.rerankService = rerankService;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /** 发布知识变更事件（图谱自动同步）/ Publish a knowledge-change event for graph auto-sync. */
+    private void publishChange(KnowledgeChangedEvent.ChangeType type, String entryId) {
+        eventPublisher.publishEvent(new KnowledgeChangedEvent(this, type, entryId));
     }
 
     /**
@@ -95,6 +107,7 @@ public class KnowledgeService {
                 .build();
 
         persistWithVector(entry);
+        publishChange(KnowledgeChangedEvent.ChangeType.ADD, entry.getId());
         log.info("[Knowledge] added entry {} kind={}", entry.getId(), entry.getKind());
         return entry;
     }
@@ -127,6 +140,52 @@ public class KnowledgeService {
         repository.updateStatus(entry.getId(), finalStatus);
         entry.setStatus(finalStatus);
         return ok;
+    }
+
+    /**
+     * 批量入库知识条目 / Batch-add knowledge entries.
+     *
+     * <p>供文档解析等来源使用：相同 sourceId 的多个块属于同一文档，
+     * 便于后续按来源级联删除。只发布一次 BATCH 事件，避免每条触发图谱重建。
+     * / Used by sources like document parsing: multiple chunks sharing a sourceId belong
+     * to one document, enabling cascade deletion. Publishes a single BATCH event to avoid
+     * rebuilding the graph per entry.
+     *
+     * @param requests 条目请求列表 / List of entry requests.
+     * @param sourceId 来源 ID（如 document-<file>）/ Source ID (e.g. document-<file>).
+     * @return 成功入库条数 / Number of entries added.
+     */
+    public int addBatch(List<KnowledgeRequest> requests, String sourceId) {
+        int added = 0;
+        for (KnowledgeRequest req : requests) {
+            String content = req.getContent() == null ? "" : req.getContent();
+            String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
+            if (repository.existsByHash(hash)) continue;
+
+            LocalDateTime now = LocalDateTime.now();
+            KnowledgeEntry entry = KnowledgeEntry.builder()
+                    .id(UUID.randomUUID().toString())
+                    .kind(req.getKind() == null ? "document" : req.getKind())
+                    .title(req.getTitle())
+                    .content(content)
+                    .formula(req.getFormula())
+                    .fields(req.getFields())
+                    .tags(req.getTags())
+                    .sourceType(req.getKind() == null ? "document" : req.getKind())
+                    .sourceId(sourceId)
+                    .datasetId(req.getDatasetId())
+                    .chunkIndex(req instanceof DocumentChunkRequest dcr ? dcr.getChunkIndex() : 0)
+                    .textHash(hash)
+                    .status("pending")
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build();
+            persistWithVector(entry);
+            added++;
+        }
+        if (added > 0) publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
+        log.info("[Knowledge] batch added {} entries from {}", added, sourceId);
+        return added;
     }
 
     /**
@@ -165,6 +224,7 @@ public class KnowledgeService {
                 .build();
 
         persistWithVector(entry);
+        publishChange(KnowledgeChangedEvent.ChangeType.ADD, entry.getId());
         log.info("[Knowledge] distilled case from analysis: {}", entry.getId());
     }
 
@@ -207,14 +267,26 @@ public class KnowledgeService {
         List<KnowledgeVectorStore.Hit> hits = search(question, null, datasetId, 5);
         if (hits.isEmpty()) return "";
 
+        int budget = props.getRerank().getContextCharBudget();
         StringBuilder sb = new StringBuilder();
         sb.append("以下是知识库中与问题相关的知识（请优先参考，不要编造）：\n");
         sb.append("Relevant knowledge from the knowledge base (prioritize these, do not fabricate):\n");
-        for (int i = 0; i < hits.size(); i++) {
-            KnowledgeVectorStore.Hit h = hits.get(i);
-            sb.append("[").append(i + 1).append("] [").append(h.getKind()).append("] ")
-                    .append(h.getTitle() == null ? "" : h.getTitle()).append(": ")
-                    .append(h.getContent()).append("\n");
+        int used = sb.length();
+        Set<String> seen = new java.util.LinkedHashSet<>();
+
+        for (KnowledgeVectorStore.Hit h : hits) {
+            // 去重：相同标题+内容只保留一条 / Deduplicate by title+content.
+            String key = (h.getTitle() == null ? "" : h.getTitle()) + "|"
+                    + (h.getContent() == null ? "" : h.getContent());
+            if (!seen.add(key)) continue;
+
+            String line = "[" + (seen.size()) + "] [" + h.getKind() + "] "
+                    + (h.getTitle() == null ? "" : h.getTitle()) + ": "
+                    + (h.getContent() == null ? "" : h.getContent()) + "\n";
+            // 字符预算：超出则截断并停止，防止撑爆 LLM prompt / Stop at char budget.
+            if (used + line.length() > budget) break;
+            sb.append(line);
+            used += line.length();
         }
         return sb.toString();
     }
@@ -392,6 +464,8 @@ public class KnowledgeService {
             if (ok) success++; else failed++;
         }
         log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);
+        // 批量变更：通知图谱同步 / Batch change: notify graph to sync.
+        if (!targets.isEmpty()) publishChange(KnowledgeChangedEvent.ChangeType.REINDEX, null);
         return Map.of("total", targets.size(), "success", success, "failed", failed);
     }
 
@@ -399,12 +473,26 @@ public class KnowledgeService {
     public void delete(String id) {
         repository.delete(id);
         vectorStore.delete(id);
+        publishChange(KnowledgeChangedEvent.ChangeType.DELETE, id);
+    }
+
+    /**
+     * 恢复软删除的知识 / Restore a soft-deleted knowledge entry.
+     * 向量仍在 Zvec 中，无需重建 / Vector is still in Zvec, no rebuild needed.
+     */
+    public boolean restore(String id) {
+        KnowledgeEntry e = repository.findByIdIncludingDeleted(id);
+        if (e == null || !e.isDeleted()) return false;
+        repository.restore(id);
+        publishChange(KnowledgeChangedEvent.ChangeType.ADD, id);
+        return true;
     }
 
     /** 按来源删除 / Delete by source ID. */
     public int deleteBySource(String sourceId) {
         List<String> ids = repository.deleteBySource(sourceId);
         vectorStore.deleteBySource(sourceId);
+        if (!ids.isEmpty()) publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
         return ids.size();
     }
 

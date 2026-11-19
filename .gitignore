@@ -43,8 +43,9 @@ backend/data/
 .DS_Store
 Thumbs.db
 
-# === 日志 / Logs ===
+# === 日志与运行时文件 / Logs & runtime files ===
 *.log
+*.pid
 logs/
 
 # === 浏览器测试临时文件 / Browser test artifacts ===

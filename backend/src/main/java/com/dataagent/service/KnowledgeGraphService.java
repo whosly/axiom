@@ -1,10 +1,12 @@
 package com.dataagent.service;
 
+import com.dataagent.domain.KnowledgeChangedEvent;
 import com.dataagent.model.KnowledgeEntry;
 import com.dataagent.repository.KnowledgeGraphRepository;
 import com.dataagent.repository.KnowledgeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -77,6 +79,25 @@ public class KnowledgeGraphService {
         return stats;
     }
 
+    /**
+     * 监听知识变更事件，自动重建图谱 / Auto-rebuild graph on knowledge-change events.
+     *
+     * <p>知识条目增删改时由 KnowledgeService 发布事件，这里自动同步图谱，
+     * 避免"知识改了图谱没更新"的不一致。当前实现用全量重建保证正确性；
+     * 图谱规模增大后可优化为按 entryId 增量更新。
+     * / KnowledgeService publishes events on entry changes; here we auto-sync the graph,
+     * avoiding inconsistency. Currently a full rebuild for correctness; can be optimized
+     * to incremental updates by entryId as the graph grows.
+     *
+     * @param event 知识变更事件 / Knowledge-change event.
+     */
+    @EventListener
+    public void onKnowledgeChanged(KnowledgeChangedEvent event) {
+        log.info("[KnowledgeGraph] auto-sync triggered: type={} entryId={}",
+                event.getChangeType(), event.getEntryId());
+        rebuild();
+    }
+
     /** 列出全部节点 / List all nodes. */
     public Map<String, Object> nodes() {
         return Map.of("nodes", graphRepo.listNodes());
@@ -112,15 +133,34 @@ public class KnowledgeGraphService {
         List<Map<String, Object>> allNodes = graphRepo.listNodes();
         List<Map<String, Object>> subNodes = new ArrayList<>();
         for (Map<String, Object> n : allNodes) {
-            if (ids.contains(String.valueOf(n.get("ID")))) subNodes.add(n);
+            // 大小写兼容：H2 返回大写键（ID），SQLite 返回小写键（id）
+            // Case-insensitive: H2 returns uppercase keys (ID), SQLite returns lowercase (id).
+            if (ids.contains(String.valueOf(mapValue(n, "id")))) subNodes.add(n);
         }
         List<Map<String, Object>> subEdges = new ArrayList<>();
         for (Map<String, Object> e : graphRepo.listEdges()) {
-            if (ids.contains(String.valueOf(e.get("SOURCE"))) && ids.contains(String.valueOf(e.get("TARGET")))) {
-                subEdges.add(e);
-            }
+            String source = String.valueOf(mapValue(e, "source"));
+            String target = String.valueOf(mapValue(e, "target"));
+            if (ids.contains(source) && ids.contains(target)) subEdges.add(e);
         }
         return Map.of("center", nodeId, "hops", hops, "nodes", subNodes, "edges", subEdges);
+    }
+
+    /**
+     * 不区分大小写读取 Map 值 / Case-insensitive map lookup.
+     *
+     * <p>JdbcTemplate.queryForList 在 H2 下返回大写列名，SQLite 下返回小写列名；
+     * 统一用此方法读取，保证两种元数据模式下邻居查询行为一致。
+     * / JdbcTemplate returns uppercase column keys on H2 and lowercase on SQLite;
+     * this helper normalizes access so neighbor queries behave identically in both modes.
+     */
+    private Object mapValue(Map<String, Object> row, String key) {
+        Object v = row.get(key);
+        if (v != null) return v;
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(key)) return e.getValue();
+        }
+        return null;
     }
 
     /** 图统计 / Graph statistics. */

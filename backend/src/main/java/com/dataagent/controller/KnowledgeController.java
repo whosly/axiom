@@ -3,12 +3,14 @@ package com.dataagent.controller;
 import com.dataagent.model.KnowledgeDetail;
 import com.dataagent.model.KnowledgeEntry;
 import com.dataagent.model.KnowledgeRequest;
+import com.dataagent.service.DocumentIngestionService;
 import com.dataagent.service.KnowledgeService;
 import com.dataagent.service.KnowledgeVectorStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -26,6 +28,22 @@ import java.util.Map;
 public class KnowledgeController {
 
     private final KnowledgeService service;
+    private final DocumentIngestionService documentIngestion;
+
+    /**
+     * 上传文档入库 / Upload a document into the knowledge base.
+     * 支持 PDF/DOCX/MD/TXT，自动分块并生成向量 / Supports PDF/DOCX/MD/TXT with auto-chunking.
+     */
+    @PostMapping("/document")
+    public ResponseEntity<?> uploadDocument(@RequestParam("file") MultipartFile file,
+                                            @RequestParam(value = "datasetId", required = false) String datasetId) {
+        try {
+            return ResponseEntity.ok(documentIngestion.ingest(file, datasetId));
+        } catch (Exception e) {
+            log.error("[Knowledge] document upload failed", e);
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
+        }
+    }
 
     /** 录入一条知识 / Add a knowledge entry. */
     @PostMapping("/entry")
@@ -81,11 +99,17 @@ public class KnowledgeController {
         return service.reindex(force);
     }
 
-    /** 删除单条 / Delete one entry. */
+    /** 删除单条（软删除）/ Soft-delete one entry. */
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable String id) {
         service.delete(id);
         return Map.of("success", true);
+    }
+
+    /** 恢复软删除的条目 / Restore a soft-deleted entry. */
+    @PostMapping("/{id}/restore")
+    public Map<String, Object> restore(@PathVariable String id) {
+        return Map.of("success", service.restore(id));
     }
 
     /** 按来源删除 / Delete by source. */

@@ -54,6 +54,8 @@ public class AppProperties {
         private boolean enabled = true;
         /** 重排候选数 / Number of candidates to rerank. */
         private int candidateSize = 20;
+        /** 注入 prompt 的知识上下文字符预算 / Char budget of knowledge context injected into prompt. */
+        private int contextCharBudget = 2000;
     }
 
     /**

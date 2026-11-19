@@ -72,6 +72,8 @@ app:
     enabled: ${RERANK_ENABLED:true}
     # 重排候选数（先召回 topN 再重排）/ Candidates to recall before rerank
     candidate-size: ${RERANK_CANDIDATE_SIZE:20}
+    # 注入 prompt 的知识上下文字符预算 / Char budget for knowledge context in prompt
+    context-char-budget: ${KNOWLEDGE_CONTEXT_CHAR_BUDGET:2000}
 
 logging:
   level:
