@@ -176,6 +176,20 @@ Extracts entities & relations from knowledge into two H2 tables:
 | POST | `/api/knowledge/search` | 混合检索测试（含 rerank）|
 | DELETE | `/api/knowledge/{id}` | 软删除（可恢复）|
 | POST | `/api/knowledge/{id}/restore` | 恢复软删除的条目 |
+| GET | `/api/knowledge/sources` | 知识来源（批次）列表 |
+| DELETE | `/api/knowledge/sources/{sourceId}` | 按来源级联删除 |
+
+### 外部 JDBC 数据源 / External JDBC datasources
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/datasources/jdbc` | 注册数据源（密码 AES 加密存储）|
+| GET | `/api/datasources/jdbc` | 列出数据源（密码隐藏）|
+| POST | `/api/datasources/jdbc/{id}/test` | 测试连接 |
+| POST | `/api/datasources/jdbc/{id}/import` | 只读查询导入为 Dataset |
+| DELETE | `/api/datasources/jdbc/{id}` | 删除数据源 |
+| POST | `/api/knowledge/graph/reason/communities` | 社区发现（标签传播）|
+| GET | `/api/knowledge/graph/reason/path?from=&to=` | 最短路径 |
+| GET | `/api/knowledge/graph/reason/related?entryId=` | 关联分析 |
 
 ### 图谱自动同步 / Graph Auto-sync
 知识条目增删改通过 `KnowledgeChangedEvent` 领域事件自动触发图谱重建，无需手动 rebuild。

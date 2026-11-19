@@ -7,7 +7,9 @@ import com.dataagent.model.DocumentChunkRequest;
 import com.dataagent.model.KnowledgeDetail;
 import com.dataagent.model.KnowledgeEntry;
 import com.dataagent.model.KnowledgeRequest;
+import com.dataagent.model.KnowledgeSource;
 import com.dataagent.repository.KnowledgeRepository;
+import com.dataagent.repository.KnowledgeSourceRepository;
 import com.dataagent.repository.MetadataRepository;
 import com.dataagent.config.AppProperties;
 import com.dataagent.domain.KnowledgeChangedEvent;
@@ -48,11 +50,14 @@ public class KnowledgeService {
     private final RerankService rerankService;
     /** 领域事件发布器，用于通知图谱自动同步 / Domain event publisher for graph auto-sync. */
     private final ApplicationEventPublisher eventPublisher;
+    /** 知识来源元数据仓储 / Knowledge source metadata repository. */
+    private final KnowledgeSourceRepository sourceRepository;
 
     public KnowledgeService(KnowledgeRepository repository, KnowledgeVectorStore vectorStore,
                             MetadataRepository metadataRepository, KnowledgeTokenizer tokenizer,
                             AppProperties props, RerankService rerankService,
-                            ApplicationEventPublisher eventPublisher) {
+                            ApplicationEventPublisher eventPublisher,
+                            KnowledgeSourceRepository sourceRepository) {
         this.repository = repository;
         this.vectorStore = vectorStore;
         this.metadataRepository = metadataRepository;
@@ -60,11 +65,47 @@ public class KnowledgeService {
         this.props = props;
         this.rerankService = rerankService;
         this.eventPublisher = eventPublisher;
+        this.sourceRepository = sourceRepository;
     }
 
     /** 发布知识变更事件（图谱自动同步）/ Publish a knowledge-change event for graph auto-sync. */
     private void publishChange(KnowledgeChangedEvent.ChangeType type, String entryId) {
         eventPublisher.publishEvent(new KnowledgeChangedEvent(this, type, entryId));
+    }
+
+    /**
+     * 登记/更新知识来源 / Register or update a knowledge source.
+     *
+     * @param sourceId 来源 ID / Source ID.
+     * @param name     名称 / Name.
+     * @param type     类型 / Type.
+     * @param count    条目数 / Entry count.
+     */
+    private void registerSource(String sourceId, String name, String type, int count) {
+        if (sourceId == null || sourceId.isBlank()) return;
+        KnowledgeSource source = sourceRepository.findById(sourceId);
+        LocalDateTime now = LocalDateTime.now();
+        if (source == null) {
+            source = new KnowledgeSource();
+            source.setId(sourceId);
+            source.setCreatedAt(now);
+        }
+        source.setName(name);
+        source.setType(type);
+        source.setEntryCount(count);
+        source.setStatus("active");
+        source.setUpdatedAt(now);
+        sourceRepository.save(source);
+    }
+
+    /** 列出全部知识来源 / List all knowledge sources. */
+    public List<KnowledgeSource> listSources() { return sourceRepository.listAll(); }
+
+    /** 删除知识来源（级联删除其知识）/ Delete a knowledge source and its entries. */
+    public int deleteSource(String sourceId) {
+        int count = deleteBySource(sourceId);
+        sourceRepository.delete(sourceId);
+        return count;
     }
 
     /**
@@ -107,6 +148,7 @@ public class KnowledgeService {
                 .build();
 
         persistWithVector(entry);
+        registerSource(entry.getSourceId(), req.getTitle() == null ? "手动录入" : req.getTitle(), "manual", 1);
         publishChange(KnowledgeChangedEvent.ChangeType.ADD, entry.getId());
         log.info("[Knowledge] added entry {} kind={}", entry.getId(), entry.getKind());
         return entry;
@@ -183,7 +225,14 @@ public class KnowledgeService {
             persistWithVector(entry);
             added++;
         }
-        if (added > 0) publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
+        if (added > 0) {
+            String srcName = requests.isEmpty() ? sourceId : (requests.get(0) instanceof DocumentChunkRequest dcr
+                    ? dcr.getSourceName() : sourceId);
+            String srcType = requests.isEmpty() ? "import" : (requests.get(0).getKind() == null
+                    ? "document" : requests.get(0).getKind());
+            registerSource(sourceId, srcName, srcType, added);
+            publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
+        }
         log.info("[Knowledge] batch added {} entries from {}", added, sourceId);
         return added;
     }
@@ -224,6 +273,7 @@ public class KnowledgeService {
                 .build();
 
         persistWithVector(entry);
+        registerSource(entry.getSourceId(), dataset.getName() + " 分析沉淀", "analysis", 1);
         publishChange(KnowledgeChangedEvent.ChangeType.ADD, entry.getId());
         log.info("[Knowledge] distilled case from analysis: {}", entry.getId());
     }

@@ -87,6 +87,18 @@ public class KnowledgeController {
         return Map.of("hits", hits, "count", hits.size());
     }
 
+    /** 列出知识来源（批次）/ List knowledge sources (batches). */
+    @GetMapping("/sources")
+    public Map<String, Object> sources() {
+        return Map.of("sources", service.listSources());
+    }
+
+    /** 删除知识来源及其全部条目 / Delete a source and all its entries. */
+    @DeleteMapping("/sources/{sourceId}")
+    public Map<String, Object> deleteSource(@PathVariable String sourceId) {
+        return Map.of("success", true, "deleted", service.deleteSource(sourceId));
+    }
+
     /** 双写状态统计（一致性监控）/ Dual-write status statistics. */
     @GetMapping("/status")
     public Map<String, Object> status() {

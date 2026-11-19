@@ -51,4 +51,3 @@ logs/
 # === 浏览器测试临时文件 / Browser test artifacts ===
 .playwright-cli/
 *.yaml
-*.png

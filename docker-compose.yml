@@ -1,0 +1,60 @@
+# 数据分析 Agent Docker Compose 配置
+# 一键启动：docker compose up -d --build
+
+services:
+  data-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 模型下载镜像源（国内可用 hf-mirror.com）/ Model download mirror
+        MODEL_MIRROR: ${MODEL_MIRROR:-https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main}
+        # Maven 依赖镜像（可选，弱网加速）/ Optional Maven mirror for slow networks
+        MAVEN_MIRROR: ${MAVEN_MIRROR:-}
+    image: data-analysis-agent:latest
+    container_name: data-analysis-agent
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      # 持久化数据：H2/DuckDB/Zvec/模型 / Persistent data
+      - agent-data:/app/data
+    # 将 .env 中的配置整体注入容器（文件不存在也不报错）
+    # Inject all .env entries into the container (missing file is tolerated)
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Java 内存 / JVM memory
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx1g}
+      # 本地 Embedding（零外部依赖）/ Local embedding, zero external dependency
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      ZVEC_DIMENSION: ${ZVEC_DIMENSION:-512}
+      # 可选：DeepSeek API Key（不填则用规则引擎降级）/ Optional DeepSeek key, rule fallback if empty
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      # 可选：远程 Embedding API（当 EMBEDDING_PROVIDER=api 时生效）
+      # Optional remote embedding API (effective when EMBEDDING_PROVIDER=api)
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.siliconflow.cn/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      # Rerank 策略与上下文预算 / Rerank strategy and context budget
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-auto}
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      RERANK_CANDIDATE_SIZE: ${RERANK_CANDIDATE_SIZE:-20}
+      KNOWLEDGE_CONTEXT_CHAR_BUDGET: ${KNOWLEDGE_CONTEXT_CHAR_BUDGET:-2000}
+      # 元数据与向量路径 / Metadata and vector paths
+      METADATA_TYPE: ${METADATA_TYPE:-h2}
+      ZVEC_ENABLED: ${ZVEC_ENABLED:-true}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+volumes:
+  agent-data:
+    name: data-agent-data

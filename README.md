@@ -39,7 +39,21 @@
 
 ## 快速开始
 
-### 1. 配置（可选）
+### Docker 一键部署（推荐，含公网 HTTPS）
+
+```bash
+cd data-analysis-agent
+cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 等配置
+
+./docker-deploy.sh deploy   # 前端编译 + 后端打包 + 镜像构建 + 启动 + 健康检查
+# 公网 HTTPS：配置 DOMAIN 后执行 ./docker-deploy.sh prod
+```
+
+无需本地安装 JDK / Maven / Node，全部在镜像内完成。详见 [docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md)。
+
+### 本地手动构建
+
+#### 1. 配置（可选）
 
 模型配置在 `backend/src/main/resources/application.yml`，也可通过环境变量覆盖：
 
@@ -50,7 +64,7 @@ export EMBEDDING_API_KEY=你的嵌入服务密钥   # 可选，用于向量检�
 
 不配置密钥也能运行，使用规则引擎降级模式。
 
-### 2. 构建
+#### 2. 构建
 
 ```bash
 # 前端
@@ -64,7 +78,7 @@ cp -r frontend/dist/* backend/src/main/resources/static/
 cd backend && mvn clean package -DskipTests
 ```
 
-### 3. 运行
+#### 3. 运行
 
 ```bash
 cd backend
@@ -80,6 +94,8 @@ java -jar target/data-analysis-agent-1.0.0.jar
 ```
 
 访问 **http://localhost:8080**
+
+![./docs/example.png](./docs/example.png)
 
 ## API 概览
 
@@ -111,6 +127,7 @@ java -jar target/data-analysis-agent-1.0.0.jar
 - [知识库设计](docs/KNOWLEDGE_BASE.md)：存储、检索、双写一致性、Rerank、知识图谱
 - [知识图谱实现细节与改进方案](docs/KNOWLEDGE_GRAPH.md)：数据模型、构建流程、BFS 查询、已知限制与 GraphRAG 演进方案
 - [面试题与参考答案](docs/INTERVIEW_QUESTIONS.md)：基于本项目的 13 道面试题（架构、图谱、检索、一致性、降级、前端）
+- [Docker 一键部署](docs/DOCKER_DEPLOYMENT.md)：编译/打包/启动/公网 HTTPS/镜像推送
 - [本地部署](docs/LOCAL_DEPLOYMENT.md)：bge-small-zh-v1.5 ONNX 模型下载与配置
 - [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md)：枚举值对象与 period 缺陷修复
 
@@ -118,6 +135,12 @@ java -jar target/data-analysis-agent-1.0.0.jar
 
 ```
 data-analysis-agent/
+├── Dockerfile                # 多阶段构建（前端 + 后端 + 模型）
+├── docker-compose.yml        # 基础服务编排
+├── docker-compose.prod.yml   # 公网 HTTPS overlay
+├── docker-deploy.sh          # Docker 一键部署脚本
+├── nginx/                    # 反向代理配置与证书目录
+├── .env.example              # 环境变量模板
 ├── frontend/          # React 前端
 │   └── src/
 │       ├── App.tsx              # 主应用与 SSE 交互

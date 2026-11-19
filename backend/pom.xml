@@ -66,6 +66,18 @@
             <version>${sqlite.version}</version>
         </dependency>
 
+        <!-- JDBC drivers for external datasources (MySQL / PostgreSQL) -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>9.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+        </dependency>
+
         <!-- Zvec: embedded vector database -->
         <dependency>
             <groupId>org.zvec</groupId>

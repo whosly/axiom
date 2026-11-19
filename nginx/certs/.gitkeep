@@ -1,0 +1,2 @@
+# 将 fullchain.pem 与 privkey.pem 放在此目录（已被 .gitignore 忽略）
+# Place fullchain.pem and privkey.pem in this directory (ignored by .gitignore)

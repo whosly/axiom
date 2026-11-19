@@ -1,0 +1,33 @@
+# Docker 构建上下文排除 / Docker build context exclusions
+# 避免把大文件传入构建上下文 / Keep large files out of the build context
+
+# 构建产物（镜像内重新构建）/ Build artifacts (rebuilt inside image)
+frontend/dist/
+frontend/node_modules/
+backend/target/
+**/*.jar
+**/*.class
+**/*.tsbuildinfo
+
+# 运行时数据（用 volume 挂载）/ Runtime data (mounted as volume)
+backend/data/
+data/
+
+# Git 与 IDE / Git & IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+**/.playwright-cli/
+
+# 文档与测试临时文件 / Docs & test artifacts
+docs/
+*.md
+*.yaml
+*.log
+*.pid
+
+# 环境变量（不要进镜像）/ Env files (never in image)
+.env
+.env.*
+!.env.example

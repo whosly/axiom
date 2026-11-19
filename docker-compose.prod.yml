@@ -1,0 +1,37 @@
+# 公网部署 overlay：在基础服务前增加 Nginx HTTPS 反向代理
+# Public deployment overlay: add Nginx HTTPS reverse proxy in front of the base service
+#
+# 用法 / Usage:
+#   ./docker-deploy.sh prod
+#   或 / or: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# 证书 / Certificates:
+#   将 fullchain.pem 与 privkey.pem 放到 ./nginx/certs/（脚本在无证书时自动生成自签名证书）
+#   Put fullchain.pem and privkey.pem in ./nginx/certs/ (script generates self-signed cert if absent)
+
+services:
+  # 后端只监听宿主机回环地址，公网流量统一经 Nginx 进入
+  # Backend binds to host loopback only; all public traffic goes through Nginx.
+  data-agent:
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: data-agent-nginx
+    depends_on:
+      - data-agent
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
