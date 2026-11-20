@@ -96,6 +96,8 @@ java -jar target/data-analysis-agent-1.0.0.jar
 
 ![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example.png)
 
+![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example2.png)
+
 ## API 概览
 
 | 方法 | 路径 | 说明 |
