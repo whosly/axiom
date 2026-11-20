@@ -6,17 +6,17 @@
 # One command does: frontend build → backend package → image build → container start → health check
 #
 # 用法 / Usage:
-#   ./docker-deploy.sh deploy        # 一键部署（构建 + 启动 + 健康检查，默认命令）
-#   ./docker-deploy.sh build         # 仅构建镜像（前端编译 + 后端打包 + 模型下载）
-#   ./docker-deploy.sh start         # 用已有镜像启动（不重新构建）
-#   ./docker-deploy.sh stop          # 停止容器（保留数据卷）
-#   ./docker-deploy.sh restart       # 重启容器
-#   ./docker-deploy.sh logs [-f]     # 查看日志（-f 实时跟踪）
-#   ./docker-deploy.sh status        # 查看状态与健康检查
-#   ./docker-deploy.sh clean         # 停止并删除容器与镜像（保留数据卷）
-#   ./docker-deploy.sh prod          # 公网部署：HTTPS 反向代理（需先配置域名与证书）
-#   ./docker-deploy.sh push          # 构建并推送镜像到 REGISTRY（可选）
-#   ./docker-deploy.sh reset-vectors # 清除 Zvec 向量数据（旧版本数据不兼容导致启动崩溃时）
+#   ./scripts/docker-deploy.sh deploy        # 一键部署（构建 + 启动 + 健康检查，默认命令）
+#   ./scripts/docker-deploy.sh build         # 仅构建镜像（前端编译 + 后端打包 + 模型下载）
+#   ./scripts/docker-deploy.sh start         # 用已有镜像启动（不重新构建）
+#   ./scripts/docker-deploy.sh stop          # 停止容器（保留数据卷）
+#   ./scripts/docker-deploy.sh restart       # 重启容器
+#   ./scripts/docker-deploy.sh logs [-f]     # 查看日志（-f 实时跟踪）
+#   ./scripts/docker-deploy.sh status        # 查看状态与健康检查
+#   ./scripts/docker-deploy.sh clean         # 停止并删除容器与镜像（保留数据卷）
+#   ./scripts/docker-deploy.sh prod          # 公网部署：HTTPS 反向代理（需先配置域名与证书）
+#   ./scripts/docker-deploy.sh push          # 构建并推送镜像到 REGISTRY（可选）
+#   ./scripts/docker-deploy.sh reset-vectors # 清除 Zvec 向量数据（旧版本数据不兼容导致启动崩溃时）
 #
 # 环境变量 / Environment variables（可用 .env 文件或 shell export）：
 #   APP_PORT          宿主机 HTTP 端口，默认 8080
@@ -29,9 +29,9 @@
 
 set -euo pipefail
 
-# 始终从脚本所在目录执行，避免在不同工作目录下失效
-# Always run from the script directory so it works from any cwd.
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 脚本位于 scripts/，始终切换到项目根目录，保证 compose 的相对路径（nginx/、.env）有效
+# Script lives in scripts/; always cd to the project root so compose relative paths (nginx/, .env) resolve.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 # 加载 .env（若存在）：让脚本与 Compose 使用同一份配置

@@ -112,9 +112,10 @@ cp -r frontend/dist/* backend/src/main/resources/static/
 cd backend
 mvn clean package -DskipTests
 
-# 4) 启动（常驻）
-./deploy.sh start
-# 或前台：java -jar target/data-analysis-agent-1.0.0.jar
+# 4) 启动（常驻，从项目根目录执行）
+cd ..
+./scripts/local-deploy.sh start
+# 或前台：cd backend && java -jar target/data-analysis-agent-1.0.0.jar
 ```
 
 访问 `http://localhost:8080`。

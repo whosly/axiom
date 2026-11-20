@@ -45,8 +45,8 @@
 cd data-analysis-agent
 cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 等配置
 
-./docker-deploy.sh deploy   # 前端编译 + 后端打包 + 镜像构建 + 启动 + 健康检查
-# 公网 HTTPS：配置 DOMAIN 后执行 ./docker-deploy.sh prod
+./scripts/docker-deploy.sh deploy   # 前端编译 + 后端打包 + 镜像构建 + 启动 + 健康检查
+# 公网 HTTPS：配置 DOMAIN 后执行 ./scripts/docker-deploy.sh prod
 ```
 
 无需本地安装 JDK / Maven / Node，全部在镜像内完成。详见 [docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md)。
@@ -81,15 +81,14 @@ cd backend && mvn clean package -DskipTests
 #### 3. 运行
 
 ```bash
-cd backend
-
-# 方式一：部署脚本（推荐，常驻后台）
-./deploy.sh start        # 启动
-./deploy.sh status       # 查看状态
-./deploy.sh restart      # 重启
-./deploy.sh stop         # 停止
+# 方式一：常驻脚本（从项目根目录执行，内部自动切到 backend）
+./scripts/local-deploy.sh start     # 启动
+./scripts/local-deploy.sh status    # 查看状态
+./scripts/local-deploy.sh restart   # 重启
+./scripts/local-deploy.sh stop      # 停止
 
 # 方式二：前台运行
+cd backend
 java -jar target/data-analysis-agent-1.0.0.jar
 ```
 
@@ -126,7 +125,7 @@ java -jar target/data-analysis-agent-1.0.0.jar
 
 - [知识库设计](docs/KNOWLEDGE_BASE.md)：存储、检索、双写一致性、Rerank、知识图谱
 - [知识图谱实现细节与改进方案](docs/KNOWLEDGE_GRAPH.md)：数据模型、构建流程、BFS 查询、已知限制与 GraphRAG 演进方案
-- [面试题与参考答案](docs/INTERVIEW_QUESTIONS.md)：基于本项目的 13 道面试题（架构、图谱、检索、一致性、降级、前端）
+- [项目问答](docs/PROJECT_QA.md)：13 个关键设计问题（架构存储、知识库检索、知识图谱、降级实践、前端可视化）
 - [Docker 一键部署](docs/DOCKER_DEPLOYMENT.md)：编译/打包/启动/公网 HTTPS/镜像推送
 - [本地部署](docs/LOCAL_DEPLOYMENT.md)：bge-small-zh-v1.5 ONNX 模型下载与配置
 - [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md)：枚举值对象与 period 缺陷修复
@@ -138,7 +137,9 @@ data-analysis-agent/
 ├── Dockerfile                # 多阶段构建（前端 + 后端 + 模型）
 ├── docker-compose.yml        # 基础服务编排
 ├── docker-compose.prod.yml   # 公网 HTTPS overlay
-├── docker-deploy.sh          # Docker 一键部署脚本
+├── scripts/                  # 部署脚本集中目录
+│   ├── docker-deploy.sh      # Docker 一键部署（推荐）
+│   └── local-deploy.sh       # 本地 jar 常驻部署（无 Docker）
 ├── nginx/                    # 反向代理配置与证书目录
 ├── .env.example              # 环境变量模板
 ├── frontend/          # React 前端
@@ -151,7 +152,6 @@ data-analysis-agent/
 │       │   └── AnalysisChart.tsx   # ECharts 图表
 │       └── types.ts
 └── backend/           # Spring Boot 后端
-    ├── deploy.sh              # 部署脚本
     └── src/main/java/com/dataagent/
         ├── config/            # 数据源、Zvec、Web 配置
         ├── controller/        # REST + SSE API

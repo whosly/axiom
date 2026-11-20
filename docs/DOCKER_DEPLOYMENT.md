@@ -22,14 +22,14 @@ No local JDK/Maven/Node needed — everything happens inside the build.
 cd data-analysis-agent
 
 # 一键部署：构建 + 启动 + 等待健康检查通过
-./docker-deploy.sh deploy
+./scripts/docker-deploy.sh deploy
 
 # 访问 / Access
 # http://localhost:8080
 ```
 
-`deploy` 是默认命令，直接执行 `./docker-deploy.sh` 效果相同。
-`deploy` is the default command; running `./docker-deploy.sh` alone has the same effect.
+`deploy` 是默认命令，直接执行 `./scripts/docker-deploy.sh` 效果相同。
+`deploy` is the default command; running `./scripts/docker-deploy.sh` alone has the same effect.
 
 脚本会自动等待 `/api/health` 通过并输出应用地址。
 The script waits for `/api/health` and prints the ready URL.
@@ -37,18 +37,18 @@ The script waits for `/api/health` and prints the ready URL.
 ## 3. 脚本命令 / Script Commands
 
 ```bash
-./docker-deploy.sh deploy        # 一键部署（构建 + 启动 + 健康检查）
-./docker-deploy.sh build         # 仅构建镜像（前端+后端+模型）
-./docker-deploy.sh start         # 用已有镜像启动（跳过构建，更快）
-./docker-deploy.sh stop          # 停止容器（保留数据卷）
-./docker-deploy.sh restart       # 重启容器并等待健康检查
-./docker-deploy.sh logs          # 查看日志
-./docker-deploy.sh logs -f       # 实时跟踪日志
-./docker-deploy.sh status        # 状态与健康检查
-./docker-deploy.sh clean         # 删除容器与镜像（保留数据卷）
-./docker-deploy.sh prod          # 公网 HTTPS 部署（见第 7 节）
-./docker-deploy.sh push          # 构建并推送镜像到 REGISTRY（见第 8 节）
-./docker-deploy.sh reset-vectors # 清除 Zvec 向量数据（兼容性故障恢复，见第 11 节）
+./scripts/docker-deploy.sh deploy        # 一键部署（构建 + 启动 + 健康检查）
+./scripts/docker-deploy.sh build         # 仅构建镜像（前端+后端+模型）
+./scripts/docker-deploy.sh start         # 用已有镜像启动（跳过构建，更快）
+./scripts/docker-deploy.sh stop          # 停止容器（保留数据卷）
+./scripts/docker-deploy.sh restart       # 重启容器并等待健康检查
+./scripts/docker-deploy.sh logs          # 查看日志
+./scripts/docker-deploy.sh logs -f       # 实时跟踪日志
+./scripts/docker-deploy.sh status        # 状态与健康检查
+./scripts/docker-deploy.sh clean         # 删除容器与镜像（保留数据卷）
+./scripts/docker-deploy.sh prod          # 公网 HTTPS 部署（见第 7 节）
+./scripts/docker-deploy.sh push          # 构建并推送镜像到 REGISTRY（见第 8 节）
+./scripts/docker-deploy.sh reset-vectors # 清除 Zvec 向量数据（兼容性故障恢复，见第 11 节）
 ```
 
 ## 4. 配置 / Configuration
@@ -76,7 +76,7 @@ cp .env.example .env
 
 例 / Example：
 ```bash
-APP_PORT=9090 JAVA_OPTS=-Xmx2g DEEPSEEK_API_KEY=sk-xxx ./docker-deploy.sh deploy
+APP_PORT=9090 JAVA_OPTS=-Xmx2g DEEPSEEK_API_KEY=sk-xxx ./scripts/docker-deploy.sh deploy
 ```
 
 ## 5. 多阶段构建说明 / Multi-stage Build
@@ -118,7 +118,7 @@ Runtime data is mounted at `/app/data` via volume `data-agent-data`：
 
 - `docker compose down` **不会删除**数据卷 / does **not** remove the volume
 - `docker compose down -v` 会删除数据卷（谨慎）/ **will** remove the volume (caution)
-- `./docker-deploy.sh clean` 只删容器和镜像，保留数据卷 / keeps the volume
+- `./scripts/docker-deploy.sh clean` 只删容器和镜像，保留数据卷 / keeps the volume
 
 ## 7. 公网 HTTPS 部署 / Public HTTPS Deployment
 
@@ -130,7 +130,7 @@ DEEPSEEK_API_KEY=sk-xxx
 EOF
 
 # 一键启动 HTTPS 反向代理 / One-click HTTPS reverse proxy
-./docker-deploy.sh prod
+./scripts/docker-deploy.sh prod
 ```
 
 脚本行为 / What the script does：
@@ -143,7 +143,7 @@ EOF
 证书配置 / Certificate setup：
 
 - **测试**：脚本自动生成自签名证书，浏览器会提示不安全
-- **生产**：将 Let's Encrypt 等 CA 签发的 `fullchain.pem` 和 `privkey.pem` 放入 `nginx/certs/`，重新执行 `./docker-deploy.sh prod`
+- **生产**：将 Let's Encrypt 等 CA 签发的 `fullchain.pem` 和 `privkey.pem` 放入 `nginx/certs/`，重新执行 `./scripts/docker-deploy.sh prod`
 
 Nginx 配置要点 / Nginx notes：
 
@@ -157,7 +157,7 @@ Nginx 配置要点 / Nginx notes：
 ## 8. 推送镜像到仓库 / Push Image to Registry
 
 ```bash
-REGISTRY=registry.example.com/team ./docker-deploy.sh push
+REGISTRY=registry.example.com/team ./scripts/docker-deploy.sh push
 ```
 
 推送后可登录目标服务器拉取运行：
@@ -197,12 +197,12 @@ The app has no authentication (single-user design). Before public exposure:
 |---|---|
 | 构建卡在 Maven 下载 | 设置 `MAVEN_MIRROR=https://maven.aliyun.com/repository/public` 后重新 `deploy` |
 | 构建卡在模型下载 | 换 `MODEL_MIRROR` 源，或按下方离线方案手动放模型 |
-| 容器反复重启 | `./docker-deploy.sh logs` 看异常；若日志出现 `SIGSEGV` + `libzvec_c_api.so`，见下方向量兼容处理 |
-| 容器因 Zvec 崩溃（SIGSEGV）| 旧版本向量数据格式不兼容；执行 `./docker-deploy.sh reset-vectors && ./docker-deploy.sh restart`，业务数据保留，向量重建 |
+| 容器反复重启 | `./scripts/docker-deploy.sh logs` 看异常；若日志出现 `SIGSEGV` + `libzvec_c_api.so`，见下方向量兼容处理 |
+| 容器因 Zvec 崩溃（SIGSEGV）| 旧版本向量数据格式不兼容；执行 `./scripts/docker-deploy.sh reset-vectors && ./scripts/docker-deploy.sh restart`，业务数据保留，向量重建 |
 | 健康检查失败 | 端口被占用改 `APP_PORT`；首次加载慢等待 90s；prod 模式用 `curl -k` |
 | SSE 无实时输出 | 确认走的是 Nginx `/api/chat` location（已关闭 buffering）|
 | 数据丢失 | 确认没用 `down -v`；`docker volume inspect data-agent-data` |
-| 想重新构建 | `./docker-deploy.sh clean && ./docker-deploy.sh deploy` |
+| 想重新构建 | `./scripts/docker-deploy.sh clean && ./scripts/docker-deploy.sh deploy` |
 
 离线部署 / Offline deployment：构建期需要网络下载 Node 依赖、Maven 依赖与模型，运行期完全离线。
 若构建机无法访问 hf-mirror，手动下载 `model.onnx` 和 `vocab.txt` 放到
