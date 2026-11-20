@@ -203,8 +203,14 @@ do_reset_vectors() {
   check_docker
   local vol="data-agent-data"
   warn "将删除数据卷 $vol 中的 Zvec 向量数据（业务数据保留）/ Removing Zvec vectors from volume $vol (business data kept)"
-  docker run --rm -v "${vol}:/app/data" alpine:3.20 \
-    sh -c 'rm -rf /app/data/zvec && echo "zvec data removed"'
+  # 优先用已构建的应用镜像执行清理，避免额外拉取 alpine（离线环境拉取会失败）
+  # Prefer the already-built app image to avoid pulling alpine (which fails offline).
+  local cleaner="$IMAGE"
+  if ! docker image inspect "$cleaner" >/dev/null 2>&1; then
+    cleaner="busybox:1.36"
+  fi
+  docker run --rm -v "${vol}:/app/data" --entrypoint sh "$cleaner" \
+    -c 'rm -rf /app/data/zvec && echo "zvec data removed"'
   info "向量数据已清除，重启后自动重建 / Vectors cleared, will be rebuilt on restart"
   info "执行 / Run: $0 restart"
 }

@@ -14,6 +14,10 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => json<Record<string, unknown>>('/health'),
 
+  // 可用模型列表与默认模型 / Available chat models and the default model
+  models: async (): Promise<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }> =>
+    json<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }>('/models'),
+
   // ---- 知识库 / Knowledge base ----
   listKnowledge: async (): Promise<{ entries: KnowledgeEntry[]; stats: Array<Record<string, unknown>> }> =>
     json<{ entries: KnowledgeEntry[]; stats: Array<Record<string, unknown>> }>('/knowledge'),
@@ -34,6 +38,14 @@ export const api = {
 
   getKnowledgeDetail: async (id: string): Promise<Record<string, unknown>> =>
     (await json<{ detail: Record<string, unknown> }>(`/knowledge/${id}/detail`)).detail,
+
+  // 上传文档入库（PDF/DOCX/MD/TXT）/ Ingest a document into the knowledge base
+  ingestDocument: async (file: File, datasetId?: string): Promise<Record<string, unknown>> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (datasetId) fd.append('datasetId', datasetId);
+    return json<Record<string, unknown>>('/knowledge/document', { method: 'POST', body: fd });
+  },
 
   knowledgeStatus: () => json<Record<string, unknown>>('/knowledge/status'),
   reindexKnowledge: (force = false) =>
@@ -102,11 +114,13 @@ export const api = {
   chat: async (
     payload: { sessionId?: string; datasetId: string; message: string; model: string },
     onEvent: (event: SSEEvent) => void,
+    signal?: AbortSignal,
   ): Promise<void> => {
     const res = await fetch(BASE + '/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

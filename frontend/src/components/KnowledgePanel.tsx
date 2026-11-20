@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
-import { Button, Input, Textarea, Select, Tag, Dialog, Loading } from 'tdesign-react';
-import { AddIcon, SearchIcon, DeleteIcon, BookIcon, BrowseIcon } from 'tdesign-icons-react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Button, Input, Textarea, Select, Tag, Dialog, Loading, Tooltip } from 'tdesign-react';
+import { AddIcon, SearchIcon, DeleteIcon, BookIcon, BrowseIcon, RefreshIcon } from 'tdesign-icons-react';
 import { api } from '../api';
 import type { KnowledgeEntry, KnowledgeHit, KnowledgeInput } from '../types';
 import { KIND_LABELS } from '../types';
-import { KnowledgeGraphView } from './KnowledgeGraphView';
+// 图谱视图依赖 ECharts，按需加载避免进入首屏 bundle / Lazy-load the ECharts-based graph view.
+const KnowledgeGraphView = lazy(() => import('./KnowledgeGraphView').then(m => ({ default: m.KnowledgeGraphView })));
 import { ZvecInspectorView } from './ZvecInspectorView';
 
 /**
@@ -35,12 +36,47 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   // 视图切换：entries | graph | zvec / View switcher
   const [view, setView] = useState<'entries' | 'graph' | 'zvec'>('entries');
+  // 文档上传与向量状态 / Document upload and vector status
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [statusStats, setStatusStats] = useState<Array<Record<string, unknown>>>([]);
+  const [reindexing, setReindexing] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
-    try { setEntries((await api.listKnowledge()).entries); }
-    catch (e) { console.error(e); }
+    try {
+      setEntries((await api.listKnowledge()).entries);
+      // 向量状态统计与条目列表并行刷新；H2 返回大写键 STATUS/COUNT，需兼容读取
+      // Refresh vector status alongside entries; H2 returns uppercase STATUS/COUNT keys.
+      const status = await api.knowledgeStatus();
+      const raw = (status.statuses || status.stats || status.status || []) as Array<Record<string, unknown>>;
+      setStatusStats(raw.map(s => ({
+        status: s.status ?? s.STATUS,
+        count: s.count ?? s.COUNT,
+      })));
+    } catch (e) { console.error(e); }
     finally { setLoading(false); }
+  };
+
+  /** 上传文档入库并刷新 / Ingest an uploaded document and refresh. */
+  const uploadDocument = async (file: File) => {
+    setBusy(true);
+    try {
+      const result = await api.ingestDocument(file, datasetId || undefined);
+      alert(`文档入库完成 / Document ingested：${result.chunks} 块 / chunks，${result.added} 条 / entries`);
+      await refresh();
+    } catch (e) { alert('文档入库失败 / Ingest failed: ' + (e as Error).message); }
+    finally { setBusy(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
+  };
+
+  /** 重建失败向量的索引 / Reindex entries with failed vectors. */
+  const doReindex = async (force: boolean) => {
+    setReindexing(true);
+    try {
+      const result = await api.reindexKnowledge(force);
+      alert('向量重建完成 / Reindex done: ' + JSON.stringify(result));
+      await refresh();
+    } catch (e) { alert('向量重建失败 / Reindex failed: ' + (e as Error).message); }
+    finally { setReindexing(false); }
   };
 
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -93,15 +129,41 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
           <Button size="small" variant={view === 'entries' ? 'base' : 'text'} onClick={() => setView('entries')}>知识条目</Button>
           <Button size="small" variant={view === 'graph' ? 'base' : 'text'} onClick={() => setView('graph')}>知识图谱</Button>
           <Button size="small" variant={view === 'zvec' ? 'base' : 'text'} onClick={() => setView('zvec')}>Zvec 数据</Button>
-          {view === 'entries' && <Button size="small" variant="outline" icon={<AddIcon />} onClick={() => setAddOpen(true)}>录入知识</Button>}
+          {view === 'entries' && <>
+            <Button size="small" variant="outline" icon={<AddIcon />} onClick={() => setAddOpen(true)}>录入知识</Button>
+            <Button size="small" variant="outline" icon={<AddIcon />} loading={busy}
+              onClick={() => fileInputRef.current?.click()}>导入文档</Button>
+            <input ref={fileInputRef} type="file" accept=".pdf,.docx,.md,.txt" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadDocument(f); }} />
+            <Tooltip content="重建失败向量；force=true 时重建全部">
+              <Button size="small" variant="text" icon={<RefreshIcon />} loading={reindexing}
+                onClick={() => doReindex(false)}>重建向量</Button>
+            </Tooltip>
+          </>}
           <Button size="small" variant="text" onClick={onClose}>返回对话</Button>
         </div>
       </header>
 
-      {view === 'graph' ? <KnowledgeGraphView /> :
+      {view === 'graph' ? <Suspense fallback={<div className="flex justify-center py-16"><Loading /></div>}><KnowledgeGraphView /></Suspense> :
        view === 'zvec' ? <ZvecInspectorView /> :
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-4xl mx-auto space-y-6">
+          {/* 向量化状态概览 / Vectorization status overview */}
+          {statusStats.length > 0 && (
+            <div className="flex items-center gap-3 flex-wrap text-xs rounded-xl p-3 border"
+              style={{ borderColor: 'var(--td-component-stroke)', backgroundColor: 'var(--td-bg-color-container)' }}>
+              <span className="font-medium">向量状态 / Vector status</span>
+              {statusStats.map((s, i) => (
+                <Tag key={i} size="small" variant="light"
+                  theme={String(s.status) === 'ready' ? 'success' : String(s.status) === 'vector_failed' ? 'danger' : 'warning'}>
+                  {String(s.status)}: {String(s.count ?? 0)}
+                </Tag>
+              ))}
+              <Button size="small" variant="text" icon={<RefreshIcon />} loading={reindexing}
+                onClick={() => doReindex(true)}>强制重建全部 / Rebuild all</Button>
+            </div>
+          )}
+
           {/* 检索测试台 / Retrieval test console */}
           <div className="rounded-xl p-4 border" style={{ borderColor: 'var(--td-component-stroke)', backgroundColor: 'var(--td-bg-color-container)' }}>
             <div className="text-sm font-medium mb-3">检索测试 / Retrieval Test</div>

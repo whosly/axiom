@@ -125,7 +125,9 @@ public class AppProperties {
             private String baseUrl = "https://api.siliconflow.cn/v1";
             private String apiKey = "";
             private String model = "BAAI/bge-m3";
-            private int dimension = 1024;
+            // 与 application.yml 的 EMBEDDING_DIMENSION 及 zvec 默认维度保持一致，避免兼容配置面出现分歧
+            // Keep in sync with application.yml EMBEDDING_DIMENSION and the zvec default dimension.
+            private int dimension = 512;
         }
     }
 }

@@ -29,7 +29,12 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [dark, setDark] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
-  const [abortRef] = useState<AbortController | null>(null);
+  // 可用模型列表（来自 /api/models），避免硬编码 / Available models from API instead of hardcoding
+  const [models, setModels] = useState<Array<{ modelId: string; name: string }>>([]);
+  const [selectedModel, setSelectedModel] = useState('deepseek-chat');
+  // 用 ref 持有 AbortController，保证 stop 按钮能中断正在进行的 SSE 请求
+  // Hold the AbortController in a ref so the stop button can cancel the in-flight SSE request.
+  const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedDataset = datasets.find(d => d.id === selectedDatasetId) || null;
@@ -51,7 +56,15 @@ function App() {
     try { setSessions(await api.listSessions()); } catch (e) { console.error(e); }
   }, []);
 
-  useEffect(() => { loadDatasets(); loadSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    loadDatasets();
+    loadSessions();
+    // 加载模型列表，失败时保持默认模型 / Load models; keep default on failure.
+    api.models().then(m => {
+      setModels(m.models);
+      setSelectedModel(m.defaultModel || m.models[0]?.modelId || 'deepseek-chat');
+    }).catch(e => console.error('load models failed', e));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   useEffect(() => {
@@ -88,13 +101,18 @@ function App() {
     setInput('');
     setIsLoading(true);
 
+    // 每次请求使用独立的 AbortController，避免中断旧请求时误伤新请求
+    // Use a fresh controller per request so aborting never cancels a newer request.
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     const updateAssistant = (updater: (m: ChatMessage) => ChatMessage) => {
       setMessages(prev => prev.map(m => m.id === assistantMsg.id ? updater(m) : m));
     };
 
     try {
       await api.chat({ sessionId: currentSessionId || undefined, datasetId: selectedDatasetId,
-        message: question, model: 'deepseek-chat' }, (event: SSEEvent) => {
+        message: question, model: selectedModel }, (event: SSEEvent) => {
         switch (event.type) {
           case 'init':
             setCurrentSessionId(event.sessionId);
@@ -125,13 +143,27 @@ function App() {
             updateAssistant(m => ({ ...m, content: '分析失败：' + event.message, streaming: false, stage: undefined }));
             break;
         }
-      });
+      }, controller.signal);
       updateAssistant(m => ({ ...m, streaming: false }));
     } catch (e) {
-      updateAssistant(m => ({ ...m, content: '请求失败：' + (e as Error).message, streaming: false }));
+      // 主动取消属于用户操作，不展示为错误；仅将流式光标收尾
+      // An intentional abort is a user action, not an error; only stop the streaming cursor.
+      const aborted = controller.signal.aborted;
+      updateAssistant(m => ({
+        ...m,
+        content: aborted ? (m.content || '已停止生成') : '请求失败：' + (e as Error).message,
+        streaming: false,
+        stage: undefined,
+      }));
     } finally {
+      abortRef.current = null;
       setIsLoading(false);
     }
+  };
+
+  /** 停止当前 SSE 请求 / Abort the current SSE request. */
+  const stopGeneration = () => {
+    abortRef.current?.abort();
   };
 
   const handleDatasetCreated = (d: Dataset) => {
@@ -245,6 +277,15 @@ function App() {
         <div className="border-t px-6 py-4 flex-shrink-0"
           style={{ borderColor: 'var(--td-component-stroke)', backgroundColor: 'var(--td-bg-color-container)' }}>
           <div className="max-w-4xl mx-auto">
+            {/* 模型选择 / Model selector */}
+            {models.length > 0 && (
+              <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: 'var(--td-text-color-secondary)' }}>
+                <span>模型 / Model</span>
+                <Select size="small" value={selectedModel} disabled={isLoading}
+                  onChange={v => setSelectedModel(v as string)}
+                  options={models.map(m => ({ label: m.name, value: m.modelId }))} style={{ width: 200 }} />
+              </div>
+            )}
             <div className="flex gap-2 items-end">
               <textarea
                 value={input}
@@ -258,7 +299,7 @@ function App() {
                   color: 'var(--td-text-color-primary)' }}
               />
               {isLoading ? (
-                <Button variant="outline" icon={<StopIcon />} onClick={() => { abortRef?.abort(); setIsLoading(false); }}>
+                <Button variant="outline" icon={<StopIcon />} onClick={stopGeneration}>
                   停止
                 </Button>
               ) : (

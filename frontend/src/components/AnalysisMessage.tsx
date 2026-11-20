@@ -1,9 +1,11 @@
-import { useState } from 'react';
-import { Tag, Collapse } from 'tdesign-react';
+import { lazy, Suspense, useState } from 'react';
+import { Tag, Collapse, Loading } from 'tdesign-react';
 import { ChevronDownIcon, ChartBarIcon, TipsIcon, CheckCircleIcon } from 'tdesign-icons-react';
 import type { ChatMessage } from '../types';
 import { INTENT_LABELS, INTENT_COLORS } from '../types';
-import { AnalysisChart } from './AnalysisChart';
+
+// ECharts 体积较大，按需加载避免阻塞首屏 / Lazy-load the heavy ECharts bundle.
+const AnalysisChart = lazy(() => import('./AnalysisChart').then(m => ({ default: m.AnalysisChart })));
 
 interface Props {
   message: ChatMessage;
@@ -58,7 +60,9 @@ export function AnalysisMessage({ message, dark }: Props) {
         {result?.chart && result.rows.length > 0 && (
           <div className="rounded-xl p-4 border"
             style={{ backgroundColor: 'var(--td-bg-color-container)', borderColor: 'var(--td-component-stroke)' }}>
-            <AnalysisChart chart={result.chart} dark={dark} />
+            <Suspense fallback={<div className="flex justify-center py-10"><Loading /></div>}>
+              <AnalysisChart chart={result.chart} dark={dark} />
+            </Suspense>
           </div>
         )}
 

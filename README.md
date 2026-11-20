@@ -129,6 +129,7 @@ java -jar target/data-analysis-agent-1.0.0.jar
 - [Docker 一键部署](docs/DOCKER_DEPLOYMENT.md)：编译/打包/启动/公网 HTTPS/镜像推送
 - [本地部署](docs/LOCAL_DEPLOYMENT.md)：bge-small-zh-v1.5 ONNX 模型下载与配置
 - [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md)：枚举值对象与 period 缺陷修复
+- [产品路线图](docs/ROADMAP.md)：已完成功能、Backlog 与方向决策
 
 ## 项目结构
 

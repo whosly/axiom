@@ -260,9 +260,15 @@ app:
 
 未配置 Embedding Key 时：向量写入失败（状态 `vector_failed`），检索自动走倒排索引降级，rerank 用规则策略——系统完全可用。
 
-## 16. 未实现 / Roadmap
+## 16. 已实现与路线图 / Implemented & Roadmap
 
-- 文档解析适配器（PDF/Word/MD 分块入库）
-- 权限隔离 / 多租户
-- 知识版本管理与软删除
-- 图算法（社区发现、最短路径）与更丰富的图谱推理
+已实现 / Implemented：
+- 文档解析适配器（PDF/DOCX/MD/TXT 分块入库）/ Document ingestion adapter
+- 知识版本管理与软删除 / Versioning and soft delete
+- 图算法（社区发现、最短路径、关联分析）/ Graph algorithms
+
+待实现 / Backlog：
+- 权限隔离 / 多租户 / Access control and multi-tenancy
+- 图谱增量更新（当前为事件驱动全量重建）/ Incremental graph updates
+
+详见 [ROADMAP.md](ROADMAP.md)。
