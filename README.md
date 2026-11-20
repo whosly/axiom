@@ -94,7 +94,7 @@ java -jar target/data-analysis-agent-1.0.0.jar
 
 访问 **http://localhost:8080**
 
-![./docs/example.png](./docs/example.png)
+![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example.png)
 
 ## API 概览
 
