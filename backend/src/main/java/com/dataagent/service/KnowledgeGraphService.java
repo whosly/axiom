@@ -188,6 +188,4 @@ public class KnowledgeGraphService {
         return null;
     }
 
-    /** 图统计 / Graph statistics. */
-    public Map<String, Object> stats() { return graphRepo.stats(); }
 }

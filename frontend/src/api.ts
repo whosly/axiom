@@ -13,8 +13,6 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => json<Record<string, unknown>>('/health'),
-
   // 可用模型列表与默认模型 / Available chat models and the default model
   models: async (): Promise<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }> =>
     json<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }>('/models'),
@@ -64,8 +62,6 @@ export const api = {
   rebuildGraph: () => json<Record<string, unknown>>('/knowledge/graph/rebuild', { method: 'POST' }),
   graphNeighbors: (nodeId: string, hops = 1) =>
     json<Record<string, unknown>>(`/knowledge/graph/neighbors?nodeId=${encodeURIComponent(nodeId)}&hops=${hops}`),
-  graphStats: () => json<{ nodes: number; edges: number; byType: Array<{ type: string; count: number }> }>(
-    '/knowledge/graph/stats'),
 
   // 图谱推理 / Graph reasoning
   graphCommunities: (maxIterations = 20) =>

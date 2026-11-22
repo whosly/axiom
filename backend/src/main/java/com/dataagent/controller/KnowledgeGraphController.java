@@ -41,8 +41,4 @@ public class KnowledgeGraphController {
                                          @RequestParam(defaultValue = "1") int hops) {
         return service.neighbors(nodeId, hops);
     }
-
-    /** 统计 / Statistics. */
-    @GetMapping("/stats")
-    public Map<String, Object> stats() { return service.stats(); }
 }

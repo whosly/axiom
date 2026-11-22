@@ -38,7 +38,6 @@ class ControllerDelegationTest {
     void graphController() {
         when(graphService.graph()).thenReturn(Map.of("nodes", List.of()));
         when(graphService.neighbors("n1", 2)).thenReturn(Map.of("nodes", List.of()));
-        when(graphService.stats()).thenReturn(Map.of("nodes", 0));
 
         KnowledgeGraphController c = new KnowledgeGraphController(graphService);
         assertThat(c.rebuild()).isNotNull();
@@ -46,7 +45,6 @@ class ControllerDelegationTest {
         assertThat(c.nodes()).isNotNull();
         assertThat(c.edges()).isNotNull();
         assertThat(c.neighbors("n1", 2)).containsKey("nodes");
-        assertThat(c.stats()).containsKey("nodes");
         verify(graphService).rebuild();
         verify(graphService).neighbors("n1", 2);
     }

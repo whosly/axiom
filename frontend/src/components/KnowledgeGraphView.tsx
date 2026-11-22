@@ -17,7 +17,9 @@ const NODE_COLORS: Record<string, string> = {
 };
 
 export function KnowledgeGraphView() {
-  const [graph, setGraph] = useState<{ nodes: any[]; edges: any[]; stats: any } | null>(null);
+  // 图数据只存节点与边；统计由当前显示的数据实时计算，聚焦子图后仍准确
+  // Store only nodes/edges; stats are derived from displayed data so they stay correct after focusing.
+  const [graph, setGraph] = useState<{ nodes: any[]; edges: any[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string>('');
 
@@ -25,7 +27,7 @@ export function KnowledgeGraphView() {
     setLoading(true);
     try {
       const g: any = await api.getGraph();
-      setGraph({ nodes: g.nodes || [], edges: g.edges || [], stats: g.stats });
+      setGraph({ nodes: g.nodes || [], edges: g.edges || [] });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -44,7 +46,7 @@ export function KnowledgeGraphView() {
     setLoading(true);
     try {
       const r: any = await api.graphNeighbors(nodeId, 2);
-      setGraph({ nodes: r.nodes || [], edges: r.edges || [], stats: graph?.stats });
+      setGraph({ nodes: r.nodes || [], edges: r.edges || [] });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -98,10 +100,10 @@ export function KnowledgeGraphView() {
         style={{ borderColor: 'var(--td-component-stroke)' }}>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">知识图谱 / Knowledge Graph</span>
-          {graph?.stats && (
+          {graph && (
             <>
-              <Tag size="small" variant="light">节点 {String((graph.stats as any).NODES ?? (graph.stats as any).nodes ?? 0)}</Tag>
-              <Tag size="small" variant="light">关系 {String((graph.stats as any).EDGES ?? (graph.stats as any).edges ?? 0)}</Tag>
+              <Tag size="small" variant="light">节点 {graph.nodes.length}</Tag>
+              <Tag size="small" variant="light">关系 {graph.edges.length}</Tag>
             </>
           )}
         </div>
