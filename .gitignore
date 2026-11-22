@@ -20,6 +20,7 @@ backend/src/main/resources/static/index.html
 # === 运行时数据 / Runtime data (databases, vectors, models) ===
 # 这些数据由应用运行时生成，不应提交 / Generated at runtime, must not be committed.
 backend/data/
+.git/
 *.db
 *.mv.db
 *.duckdb
@@ -44,6 +45,7 @@ backend/data/
 .grok/
 .mvn/
 .idea/
+.cloudbase/
 *.iml
 .DS_Store
 Thumbs.db
