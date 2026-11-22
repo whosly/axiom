@@ -1,6 +1,9 @@
 package com.dataagent.service;
 
 import com.dataagent.config.AppProperties;
+import com.dataagent.llm.LlmProvider;
+import com.dataagent.llm.LlmProviderConfig;
+import com.dataagent.llm.LlmProviderFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -10,19 +13,21 @@ import java.util.Map;
 /**
  * 运行时 LLM 配置服务 / Runtime LLM configuration service.
  *
- * <p>直接修改 Spring 配置属性对象（可变 bean）实现热更新，无需重启。
- * DeepSeekProvider 每次构建请求时读取该对象，因此更新立即生效。
- * Hot-reloads by mutating the Spring configuration bean; DeepSeekProvider reads it
- * on every request, so changes take effect immediately without a restart.
+ * <p>直接修改 Spring 配置属性 bean 实现热更新，无需重启。所有厂商共享
+ * {@link LlmProviderConfig} 结构，配置读写针对「当前厂商」，因此新增厂商零改动。
+ * Hot-reloads by mutating the Spring config bean. All vendors share LlmProviderConfig,
+ * and read/write target the active vendor, so adding a vendor needs no changes here.
  */
 @Slf4j
 @Service
 public class LlmConfigService {
 
     private final AppProperties props;
+    private final LlmProviderFactory llmFactory;
 
-    public LlmConfigService(AppProperties props) {
+    public LlmConfigService(AppProperties props, LlmProviderFactory llmFactory) {
         this.props = props;
+        this.llmFactory = llmFactory;
     }
 
     /**
@@ -32,29 +37,46 @@ public class LlmConfigService {
      * @return 配置映射 / Configuration map
      */
     public Map<String, Object> current() {
-        var cfg = props.getLlm().getDeepseek();
+        String active = props.getLlm().getProvider();
+        LlmProviderConfig cfg = props.getLlm().config(active);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("provider", props.getLlm().getProvider());
+        result.put("provider", active);
+        result.put("displayName", displayNameOf(active));
         result.put("baseUrl", cfg.getBaseUrl());
         result.put("chatModel", cfg.getChatModel());
         result.put("reasonerModel", cfg.getReasonerModel());
         result.put("temperature", cfg.getTemperature());
         result.put("maxTokens", cfg.getMaxTokens());
         String key = cfg.getApiKey();
-        result.put("apiKeySet", key != null && !key.isBlank());
-        result.put("apiKeyMasked", key == null || key.isBlank() ? "" : mask(key));
+        result.put("apiKeySet", cfg.hasKey());
+        result.put("apiKeyMasked", cfg.hasKey() ? mask(key) : "");
+        result.put("availableProviders", llmFactory.options());
         return result;
     }
 
     /**
      * 更新 LLM 配置并立即生效 / Update LLM configuration with immediate effect.
      *
-     * @param body 配置键（provider/baseUrl/apiKey/chatModel/reasonerModel/temperature/maxTokens）
-     *             Configuration keys
+     * @param body 配置项（provider/baseUrl/apiKey/chatModel/reasonerModel/temperature/maxTokens）
+     *             Configuration items
      * @return 更新后的脱敏配置 / Updated masked configuration
      */
     public Map<String, Object> update(Map<String, String> body) {
-        var cfg = props.getLlm().getDeepseek();
+        // 切换厂商：只改策略选择，不动各厂商自己的配置 / Switch vendor: only change the strategy selector.
+        if (body.containsKey("provider") && !body.get("provider").isBlank()) {
+            String target = body.get("provider");
+            LlmProvider p = llmFactory.get(target);
+            if (p == null) {
+                throw new IllegalArgumentException("Unknown LLM provider: " + target
+                        + ". Available: " + llmFactory.all().keySet());
+            }
+            props.getLlm().setProvider(target);
+            log.info("[LLMConfig] switched provider to {}", target);
+        }
+
+        // 其余字段写入「当前厂商」配置 / Remaining fields go to the active vendor's config.
+        String active = props.getLlm().getProvider();
+        LlmProviderConfig cfg = props.getLlm().config(active);
         if (body.containsKey("apiKey")) cfg.setApiKey(body.get("apiKey"));
         if (body.containsKey("baseUrl") && !body.get("baseUrl").isBlank()) cfg.setBaseUrl(body.get("baseUrl"));
         if (body.containsKey("chatModel") && !body.get("chatModel").isBlank()) cfg.setChatModel(body.get("chatModel"));
@@ -68,18 +90,20 @@ public class LlmConfigService {
             try { cfg.setMaxTokens(Integer.parseInt(body.get("maxTokens"))); }
             catch (NumberFormatException ignored) { /* 保留原值 / keep previous value */ }
         }
-        if (body.containsKey("provider") && !body.get("provider").isBlank()) {
-            props.getLlm().setProvider(body.get("provider"));
-        }
-        log.info("[LLMConfig] updated: provider={}, model={}, keySet={}",
-                props.getLlm().getProvider(), cfg.getChatModel(),
-                cfg.getApiKey() != null && !cfg.getApiKey().isBlank());
+        log.info("[LLMConfig] updated provider={} model={} keySet={}",
+                active, cfg.getChatModel(), cfg.hasKey());
         return current();
+    }
+
+    /** 厂商展示名 / Display name of a provider. */
+    private String displayNameOf(String name) {
+        LlmProvider p = llmFactory.get(name);
+        return p == null ? name : p.displayName();
     }
 
     /** 脱敏 API Key：只显示末 4 位 / Mask the API key, showing only the last 4 chars. */
     private String mask(String key) {
-        if (key.length() <= 4) return "****";
+        if (key == null || key.length() <= 4) return "****";
         return "****" + key.substring(key.length() - 4);
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Dialog, Input, Tag, Loading } from 'tdesign-react';
+import { Dialog, Input, Tag, Loading, Select } from 'tdesign-react';
 import { api } from '../api';
 
 /** 运行时 LLM 配置面板 / Runtime LLM configuration panel. */
@@ -19,23 +19,42 @@ export function LlmConfigPanel({ visible, onClose, onUpdated }: Props) {
     temperature: '', maxTokens: '',
   });
   const [masked, setMasked] = useState('');
+  const [provider, setProvider] = useState('deepseek');
+  const [options, setOptions] = useState<Array<{ label: string; value: string }>>([]);
+
+  const loadConfig = async () => {
+    const c = await api.getLlmConfig();
+    setForm({
+      baseUrl: String(c.baseUrl || ''),
+      chatModel: String(c.chatModel || ''),
+      reasonerModel: String(c.reasonerModel || ''),
+      apiKey: '',
+      temperature: String(c.temperature ?? ''),
+      maxTokens: String(c.maxTokens ?? ''),
+    });
+    setMasked(String(c.apiKeyMasked || (c.apiKeySet ? '已设置' : '未设置')));
+    setProvider(String(c.provider || 'deepseek'));
+    setOptions(((c.availableProviders || []) as Array<{ name: string; modelId: string }>)
+      .map(p => ({ label: p.name, value: p.modelId })));
+  };
 
   useEffect(() => {
     if (!visible) return;
     setLoading(true);
-    api.getLlmConfig().then(c => {
-      setForm({
-        baseUrl: String(c.baseUrl || ''),
-        chatModel: String(c.chatModel || ''),
-        reasonerModel: String(c.reasonerModel || ''),
-        apiKey: '',
-        temperature: String(c.temperature ?? ''),
-        maxTokens: String(c.maxTokens ?? ''),
-      });
-      setMasked(String(c.apiKeyMasked || (c.apiKeySet ? '已设置' : '未设置')));
-    }).catch(e => alert('加载配置失败 / Failed: ' + (e as Error).message))
+    loadConfig().catch(e => alert('加载配置失败 / Failed: ' + (e as Error).message))
       .finally(() => setLoading(false));
   }, [visible]);
+
+  /** 切换厂商并重新加载该厂商配置 / Switch vendor and reload its config. */
+  const switchProvider = async (value: string) => {
+    setLoading(true);
+    try {
+      await api.updateLlmConfig({ provider: value });
+      await loadConfig();
+      onUpdated?.();
+    } catch (e) { alert('切换失败 / Failed: ' + (e as Error).message); }
+    finally { setLoading(false); }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -60,6 +79,8 @@ export function LlmConfigPanel({ visible, onClose, onUpdated }: Props) {
       onConfirm={save} confirmBtn={{ loading: saving, content: '保存并生效 / Save' }}>
       {loading ? <div className="flex justify-center py-10"><Loading /></div> : (
         <div className="space-y-3">
+          <div><label className="block text-xs mb-1">厂商 / Provider</label>
+            <Select value={provider} onChange={v => switchProvider(v as string)} options={options} /></div>
           <div className="flex items-center gap-2">
             <Tag theme="success" variant="light">热更新 / Hot reload</Tag>
             <span className="text-xs" style={{ color: 'var(--td-text-color-secondary)' }}>

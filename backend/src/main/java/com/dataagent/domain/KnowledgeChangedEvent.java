@@ -2,46 +2,57 @@ package com.dataagent.domain;
 
 import org.springframework.context.ApplicationEvent;
 
+import java.util.List;
+
 /**
  * 知识变更领域事件 / Knowledge-changed domain event.
  *
- * <p>当知识条目发生增删改时发布，供知识图谱等下游消费者自动同步。
- * 这样图谱无需调用方显式 rebuild，避免"知识改了图谱没更新"的不一致。
- * / Published whenever a knowledge entry is added, updated or deleted, so downstream
- * consumers such as the knowledge graph can sync automatically. This avoids the
- * inconsistency of "knowledge changed but graph not updated".
+ * <p>当知识条目发生增删改时发布，携带受影响的条目 ID 列表，供知识图谱等下游增量同步。
+ * 单条变更用单元素列表，批量用完整列表；REINDEX 向量重建不改变图谱结构，故不发事件。
+ * Published on knowledge changes with affected entry IDs so downstream consumers
+ * (e.g. knowledge graph) can sync incrementally. REINDEX emits no event because
+ * vector rebuilds do not change graph structure.
  */
 public class KnowledgeChangedEvent extends ApplicationEvent {
 
-    /** 变更类型：ADD | DELETE | BATCH | REINDEX / Change type. */
+    /** 变更类型 / Change type. */
     public enum ChangeType {
-        /** 新增条目 / Entry added. */
+        /** 新增/更新条目（增量）/ Entry added or updated (incremental). */
         ADD,
-        /** 删除条目 / Entry deleted. */
+        /** 删除单条（增量）/ Single entry deleted (incremental). */
         DELETE,
-        /** 批量变更 / Batch changes. */
+        /** 批量新增（按 ID 列表增量）/ Batch added (incremental by ID list). */
         BATCH,
-        /** 重建索引 / Reindex all. */
-        REINDEX
+        /** 批量删除（按 ID 列表增量）/ Batch deleted (incremental by ID list). */
+        DELETE_BATCH
     }
 
     private final ChangeType changeType;
-    private final String entryId;
+    /** 受影响的条目 ID（单条变更含 1 个，批量含多个）/ Affected entry IDs. */
+    private final List<String> entryIds;
 
     /**
      * 构造事件 / Construct the event.
      *
-     * @param source     事件源 / Event source.
-     * @param changeType 变更类型 / Change type.
-     * @param entryId    相关条目 ID（批量时可为空）/ Related entry ID (nullable for batch).
+     * @param source    事件源 / Event source.
+     * @param type      变更类型 / Change type.
+     * @param entryIds  受影响 ID 列表 / Affected entry IDs.
      */
-    public KnowledgeChangedEvent(Object source, ChangeType changeType, String entryId) {
+    public KnowledgeChangedEvent(Object source, ChangeType type, List<String> entryIds) {
         super(source);
-        this.changeType = changeType;
-        this.entryId = entryId;
+        this.changeType = type;
+        this.entryIds = entryIds == null ? List.of() : List.copyOf(entryIds);
+    }
+
+    /** 单条变更便捷构造 / Convenience constructor for a single entry. */
+    public KnowledgeChangedEvent(Object source, ChangeType type, String entryId) {
+        this(source, type, entryId == null ? List.of() : List.of(entryId));
     }
 
     public ChangeType getChangeType() { return changeType; }
 
-    public String getEntryId() { return entryId; }
+    public List<String> getEntryIds() { return entryIds; }
+
+    /** 首个 ID（单条变更）/ First ID (for single-entry changes). */
+    public String getEntryId() { return entryIds.isEmpty() ? null : entryIds.get(0); }
 }

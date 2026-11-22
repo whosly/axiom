@@ -28,6 +28,17 @@ public class AppProperties {
         private String provider = "local";
         /** 本地 ONNX 模型配置 / Local ONNX model configuration. */
         private Local local = new Local();
+        /** 远程 API 配置（provider=api 时生效）/ Remote API config (effective when provider=api). */
+        private Api api = new Api();
+
+        /** OpenAI 兼容 embedding API 配置 / OpenAI-compatible embedding API config. */
+        @Data
+        public static class Api {
+            private String baseUrl = "https://api.siliconflow.cn/v1";
+            private String apiKey = "";
+            private String model = "BAAI/bge-m3";
+            private int dimension = 512;
+        }
 
         /** 本地 embedding 模型配置 / Local embedding model configuration. */
         @Data
@@ -106,28 +117,27 @@ public class AppProperties {
 
     @Data
     public static class Llm {
+        /** 当前选择的厂商策略名 / Active vendor strategy name. */
         private String provider = "deepseek";
-        private Deepseek deepseek = new Deepseek();
-        private Embedding embedding = new Embedding();
 
-        @Data
-        public static class Deepseek {
-            private String baseUrl = "https://api.deepseek.com";
-            private String apiKey = "";
-            private String chatModel = "deepseek-chat";
-            private String reasonerModel = "deepseek-reasoner";
-            private double temperature = 0.1;
-            private int maxTokens = 4096;
+        /** 各厂商配置，键为策略名（deepseek/qwen），由 app.llm.providers.<name>.* 绑定
+         *  Per-vendor config keyed by strategy name, bound from app.llm.providers.<name>.*. */
+        private java.util.Map<String, com.dataagent.llm.LlmProviderConfig> providers = new java.util.LinkedHashMap<>();
+
+        /**
+         * 获取指定厂商配置，不存在时创建并返回一个空配置（含默认模型名）。
+         * Get config for a vendor; create a blank one with a default model if missing.
+         *
+         * @param name 厂商策略名 / Vendor strategy name
+         * @return 厂商配置（永不为 null）/ Vendor config (never null)
+         */
+        public com.dataagent.llm.LlmProviderConfig config(String name) {
+            return providers.computeIfAbsent(name, k -> new com.dataagent.llm.LlmProviderConfig());
         }
 
-        @Data
-        public static class Embedding {
-            private String baseUrl = "https://api.siliconflow.cn/v1";
-            private String apiKey = "";
-            private String model = "BAAI/bge-m3";
-            // 与 application.yml 的 EMBEDDING_DIMENSION 及 zvec 默认维度保持一致，避免兼容配置面出现分歧
-            // Keep in sync with application.yml EMBEDDING_DIMENSION and the zvec default dimension.
-            private int dimension = 512;
+        /** 当前厂商配置 / Config of the active vendor. */
+        public com.dataagent.llm.LlmProviderConfig currentConfig() {
+            return config(provider);
         }
     }
 }

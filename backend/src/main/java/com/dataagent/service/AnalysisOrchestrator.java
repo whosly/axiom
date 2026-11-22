@@ -1,6 +1,5 @@
 package com.dataagent.service;
 
-import com.dataagent.config.AppProperties;
 import com.dataagent.llm.LlmProvider;
 import com.dataagent.llm.LlmProviderFactory;
 import com.dataagent.llm.LlmProvider.ChatOptions;
@@ -24,15 +23,13 @@ public class AnalysisOrchestrator {
     private final AnalysisEngine engine;
     private final VectorService vectors;
     private final ObjectMapper mapper;
-    private final AppProperties props;
     private final RuleBasedPlanner rulePlanner;
     /** 知识库服务：在 plan/conclude 阶段注入业务知识 / Knowledge service: injects business knowledge into plan/conclude prompts. */
     private final KnowledgeService knowledgeService;
 
-    /** Whether a usable LLM API key is configured. */
+    /** Whether the active LLM provider has a usable API key. */
     private boolean llmAvailable() {
-        String key = props.getLlm().getDeepseek().getApiKey();
-        return key != null && !key.isBlank();
+        return llmFactory.isAvailable();
     }
 
     /** Step 1: natural language -> structured plan. */
@@ -82,7 +79,7 @@ public class AnalysisOrchestrator {
             """);
         sb.append("用户问题: ").append(question);
 
-        String model = props.getLlm().getDeepseek().getChatModel();
+        String model = llm.chatModel();
         ChatOptions options = new ChatOptions(model, 0.1, 1024, true);
 
         try {
@@ -148,7 +145,7 @@ public class AnalysisOrchestrator {
             - 不要编造数据中不存在的数字
             """);
 
-        String model = props.getLlm().getDeepseek().getChatModel();
+        String model = llm.chatModel();
         ChatOptions options = new ChatOptions(model, 0.3, 1024, false);
         StringBuilder full = new StringBuilder();
         Consumer<String> collector = token -> { full.append(token); if (tokenConsumer != null) tokenConsumer.accept(token); };

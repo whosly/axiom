@@ -87,40 +87,38 @@ public class KnowledgeGraphService {
     }
 
     /**
-     * 监听知识变更事件，自动重建图谱 / Auto-rebuild graph on knowledge-change events.
+     * 监听知识变更事件，按受影响 ID 增量同步图谱 / Incrementally sync graph by affected IDs.
      *
-     * <p>知识条目增删改时由 KnowledgeService 发布事件，这里自动同步图谱。
-     * ADD/DELETE 按 entryId 增量更新（删旧子图再写新子图），BATCH/REINDEX 走全量重建。
-     * / KnowledgeService publishes events on entry changes; ADD/DELETE sync incrementally
-     * by entryId (remove old subgraph then write new), while BATCH/REINDEX do a full rebuild.
+     * <p>所有变更类型均按 ID 列表增量处理，不再全量重建：
+     * ADD/BATCH 先删旧子图再写新；DELETE/DELETE_BATCH 仅删子图；最后清理孤立节点。
+     * All change types are processed incrementally by ID list (no full rebuild):
+     * ADD/BATCH remove then rewrite; DELETE variants only remove; orphan nodes are pruned.
      *
      * @param event 知识变更事件 / Knowledge-change event.
      */
     @EventListener
     public void onKnowledgeChanged(KnowledgeChangedEvent event) {
-        log.info("[KnowledgeGraph] auto-sync triggered: type={} entryId={}",
-                event.getChangeType(), event.getEntryId());
         var type = event.getChangeType();
-        String entryId = event.getEntryId();
-
-        // 批量与重建：全量更划算 / Batch and reindex are cheaper as a full rebuild.
-        if (type == KnowledgeChangedEvent.ChangeType.BATCH
-                || type == KnowledgeChangedEvent.ChangeType.REINDEX
-                || entryId == null || entryId.isBlank()) {
-            rebuild();
+        java.util.List<String> ids = event.getEntryIds();
+        if (ids.isEmpty()) {
+            log.debug("[KnowledgeGraph] empty change event, skip: type={}", type);
             return;
         }
+        log.info("[KnowledgeGraph] incremental sync: type={} ids={}", type, ids.size());
 
-        // 增量：先删旧子图，ADD 时再从元数据读取最新条目重建
-        // Incremental: remove the old subgraph, then rebuild from metadata for ADD.
-        graphRepo.deleteEntrySubgraph(entryId);
-        if (type == KnowledgeChangedEvent.ChangeType.ADD) {
-            KnowledgeEntry entry = knowledgeRepo.findById(entryId);
-            if (entry != null) buildEntryGraph(entry);
+        boolean isAdd = type == KnowledgeChangedEvent.ChangeType.ADD
+                || type == KnowledgeChangedEvent.ChangeType.BATCH;
+
+        for (String entryId : ids) {
+            // 先删旧子图保证幂等（ADD 覆盖更新、DELETE 纯删除）/ Remove old subgraph first for idempotency.
+            graphRepo.deleteEntrySubgraph(entryId);
+            if (isAdd) {
+                KnowledgeEntry entry = knowledgeRepo.findById(entryId);
+                if (entry != null) buildEntryGraph(entry);
+            }
         }
-        // 清理因删除而孤立的 field/tag 节点 / Clean up orphaned field/tag nodes.
         graphRepo.deleteOrphanNodes();
-        log.info("[KnowledgeGraph] incremental sync done: type={} entryId={}", type, entryId);
+        log.info("[KnowledgeGraph] incremental sync done: type={} affected={}", type, ids.size());
     }
 
     /** 列出全部节点 / List all nodes. */

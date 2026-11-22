@@ -68,9 +68,15 @@ public class KnowledgeService {
         this.sourceRepository = sourceRepository;
     }
 
-    /** 发布知识变更事件（图谱自动同步）/ Publish a knowledge-change event for graph auto-sync. */
+    /** 发布知识变更事件（图谱增量同步）/ Publish a knowledge-change event for incremental graph sync. */
     private void publishChange(KnowledgeChangedEvent.ChangeType type, String entryId) {
-        eventPublisher.publishEvent(new KnowledgeChangedEvent(this, type, entryId));
+        publishChange(type, entryId == null ? java.util.List.of() : java.util.List.of(entryId));
+    }
+
+    /** 发布批量知识变更事件 / Publish a batch knowledge-change event. */
+    private void publishChange(KnowledgeChangedEvent.ChangeType type, java.util.List<String> entryIds) {
+        if (entryIds == null || entryIds.isEmpty()) return;
+        eventPublisher.publishEvent(new KnowledgeChangedEvent(this, type, entryIds));
     }
 
     /**
@@ -199,6 +205,7 @@ public class KnowledgeService {
      */
     public int addBatch(List<KnowledgeRequest> requests, String sourceId) {
         int added = 0;
+        java.util.List<String> addedIds = new java.util.ArrayList<>();
         for (KnowledgeRequest req : requests) {
             String content = req.getContent() == null ? "" : req.getContent();
             String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
@@ -223,6 +230,7 @@ public class KnowledgeService {
                     .updatedAt(now)
                     .build();
             persistWithVector(entry);
+            addedIds.add(entry.getId());
             added++;
         }
         if (added > 0) {
@@ -231,7 +239,8 @@ public class KnowledgeService {
             String srcType = requests.isEmpty() ? "import" : (requests.get(0).getKind() == null
                     ? "document" : requests.get(0).getKind());
             registerSource(sourceId, srcName, srcType, added);
-            publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
+            // 图谱按实际新增 ID 增量同步 / Sync graph incrementally by actual added IDs.
+            publishChange(KnowledgeChangedEvent.ChangeType.BATCH, addedIds);
         }
         log.info("[Knowledge] batch added {} entries from {}", added, sourceId);
         return added;
@@ -514,8 +523,9 @@ public class KnowledgeService {
             if (ok) success++; else failed++;
         }
         log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);
-        // 批量变更：通知图谱同步 / Batch change: notify graph to sync.
-        if (!targets.isEmpty()) publishChange(KnowledgeChangedEvent.ChangeType.REINDEX, null);
+        // 向量/倒排重建不改变知识内容与图谱结构，无需通知图谱（避免全量重建）。
+        // Vector/inverted-index rebuild does not change knowledge content or graph structure;
+        // no event is emitted, avoiding a costly full graph rebuild.
         return Map.of("total", targets.size(), "success", success, "failed", failed);
     }
 
@@ -542,7 +552,8 @@ public class KnowledgeService {
     public int deleteBySource(String sourceId) {
         List<String> ids = repository.deleteBySource(sourceId);
         vectorStore.deleteBySource(sourceId);
-        if (!ids.isEmpty()) publishChange(KnowledgeChangedEvent.ChangeType.BATCH, null);
+        // 按实际删除 ID 增量移除图谱子图 / Incrementally remove graph subgraphs by deleted IDs.
+        publishChange(KnowledgeChangedEvent.ChangeType.DELETE_BATCH, ids);
         return ids.size();
     }
 

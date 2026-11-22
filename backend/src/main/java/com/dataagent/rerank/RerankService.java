@@ -1,6 +1,7 @@
 package com.dataagent.rerank;
 
 import com.dataagent.config.AppProperties;
+import com.dataagent.llm.LlmProviderFactory;
 import com.dataagent.service.KnowledgeVectorStore.Hit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,10 +25,12 @@ public class RerankService {
 
     private final Map<String, RerankProvider> providers;
     private final AppProperties props;
+    private final LlmProviderFactory llmFactory;
 
-    public RerankService(Map<String, RerankProvider> providers, AppProperties props) {
+    public RerankService(Map<String, RerankProvider> providers, AppProperties props, LlmProviderFactory llmFactory) {
         this.providers = providers;
         this.props = props;
+        this.llmFactory = llmFactory;
     }
 
     /**
@@ -64,8 +67,7 @@ public class RerankService {
     /** 按配置解析策略 / Resolve strategy by configuration. */
     private RerankProvider resolveProvider() {
         String cfg = props.getRerank().getProvider();
-        String key = props.getLlm().getDeepseek().getApiKey();
-        boolean hasKey = key != null && !key.isBlank();
+        boolean hasKey = llmFactory.isAvailable();
 
         String name;
         if ("auto".equalsIgnoreCase(cfg)) name = hasKey ? "llmRerank" : "ruleRerank";

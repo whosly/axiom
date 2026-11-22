@@ -11,7 +11,7 @@
 | 分析库 | DuckDB（嵌入式 OLAP，列式聚合） |
 | 元数据库 | H2（默认）/ SQLite（配置可切换） |
 | 向量库 | Zvec（嵌入式，双 collection：数据集语义 / 知识库） |
-| 大模型 | DeepSeek（策略模式封装，可插拔）+ OpenAI 兼容 embedding |
+| 大模型 | DeepSeek / 通义千问（OpenAI 兼容策略模式，可插拔）+ 本地/API embedding |
 | 知识库 | 统一 KnowledgeEntry + 混合检索（向量 + FTS + RRF），详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
 | 部署 | 单个可执行 jar（前端静态资源内嵌），常驻服务 |
 
@@ -26,7 +26,7 @@
               ┌───────────────┼────────────────┐
               ▼               ▼                ▼
         LlmProvider      AnalysisEngine    VectorService
-        (DeepSeek策略)   (DuckDB SQL)      (Zvec)
+     (DeepSeek/通义策略) (DuckDB SQL)      (Zvec)
               │               │                │
               └──── 分析计划 JSON ────┘                │
                           │                            │
@@ -43,7 +43,7 @@
 
 ```bash
 cd data-analysis-agent
-cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 等配置
+cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 或 QWEN_API_KEY 等配置
 
 ./scripts/docker-deploy.sh deploy   # 前端编译 + 后端打包 + 镜像构建 + 启动 + 健康检查
 # 公网 HTTPS：配置 DOMAIN 后执行 ./scripts/docker-deploy.sh prod
@@ -55,14 +55,16 @@ cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 等配置
 
 #### 1. 配置（可选）
 
-模型配置在 `backend/src/main/resources/application.yml`，也可通过环境变量覆盖：
+模型配置在 `backend/src/main/resources/application.yml`，也可通过环境变量覆盖。所有厂商共享同一配置结构（`app.llm.providers.<name>.*`）：
 
 ```bash
-export DEEPSEEK_API_KEY=sk-你的密钥
-export EMBEDDING_API_KEY=你的嵌入服务密钥   # 可选，用于向量检索
+export LLM_PROVIDER=deepseek          # 或 qwen
+export DEEPSEEK_API_KEY=sk-你的密钥    # LLM_PROVIDER=deepseek 时
+# export QWEN_API_KEY=sk-你的密钥       # LLM_PROVIDER=qwen 时（阿里云百炼兼容模式）
+export EMBEDDING_API_KEY=你的嵌入密钥  # 可选，仅 embedding.provider=api 时
 ```
 
-不配置密钥也能运行，使用规则引擎降级模式。
+不配置密钥也能运行，使用规则引擎降级模式；运行时可在前端「配置」面板热切换厂商/模型，无需重启。
 
 #### 2. 构建
 
@@ -167,6 +169,6 @@ data-analysis-agent/
         ├── controller/        # REST + SSE API
         ├── service/           # 分析引擎、编排、向量、规则降级
         ├── repository/        # DuckDB / H2 双库访问
-        ├── llm/               # LLM 策略接口 + DeepSeek 实现
+        ├── llm/               # 策略接口 + OpenAI兼容基类 + DeepSeek/通义实现 + 动态工厂
         └── model/             # 领域模型
 ```

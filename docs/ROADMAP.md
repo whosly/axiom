@@ -12,7 +12,7 @@
 |---|---|
 | 数据接入 | CSV/JSON/Excel 上传、粘贴、内置示例、JDBC 数据源直连（MySQL/PostgreSQL，前端已接入）|
 | 分析引擎 | 查询/趋势/异常/对比/概览 5 类分析，DDD 枚举值对象 |
-| LLM | DeepSeek 策略模式、运行时热配置、无 Key 规则引擎降级 |
+| LLM | DeepSeek/通义千问双厂商（OpenAI 兼容策略模式，可插拔）、运行时热配置与热切换、无 Key 规则引擎降级 |
 | Embedding | 本地 bge-small-zh-v1.5 ONNX（默认，零外部依赖）/ OpenAI 兼容 API（可选） |
 | 存储 | DuckDB（分析）+ H2/SQLite（元数据）+ Zvec（双 collection 向量）|
 | 知识库 | 统一 KnowledgeEntry、混合检索 + RRF、Rerank、双写一致性、倒排索引、文档解析入库、来源批次管理（前端已接入）|
@@ -40,23 +40,20 @@
 | 14 | 知识图谱推理 | P2 | 社区发现（标签传播）/ 最短路径（BFS）/ 关联分析 |
 | 15 | 运行时 LLM 配置 | P2 | `GET/POST /api/config/llm` 热更新 + 前端配置面板 |
 | 16 | 前后端测试覆盖 | P2 | 后端 JUnit5 + 前端 node:test |
+| 17 | 通义千问 Provider | P2 | OpenAI 兼容基类抽取，DeepSeek/通义共享协议层，配置结构与工厂重构 |
+| 18 | 图谱同步去全量重建 | P2 | 事件携带 ID 列表，BATCH/DELETE_BATCH 增量；REINDEX 不再触发图谱重建 |
 
-## 二、待实现 / Backlog（产品化方向，待确认）
+## 二、明确不做 / Out of Scope
 
-| # | 事项 | 说明 | 前置条件 |
-|---|---|---|---|
-| 17 | 多用户与权限隔离 | 用户体系、知识共享/隔离 | 确定团队化方向 |
-| 18 | 公网 SaaS 化 | 当前 Docker + HTTPS 已支持单机公网访问；多租户 SaaS 需账号体系 | 确定公网方向 |
-| 19 | 监控 / 日志 / 告警 | 运行状态可观测（指标、告警规则） | 部署规模上来后 |
+| 事项 | 决策 |
+|---|---|
+| 多用户与权限隔离 | 不做团队化，定位单人工具 / No team features; single-user tool |
+| 公网 SaaS 化 | 不做 SaaS；当前 Docker + HTTPS 单机公网部署已足够 / No multi-tenant SaaS |
+| 监控 / 日志 / 告警 | 不引入监控系统；用日志 + `/api/health` 健康检查即可 / Logs + health check suffice |
 
-## 三、方向决策依赖 / Decisions Needed
+## 三、变更记录 / Changelog
 
-- **多用户/权限（17）**：取决于「单人工具 vs 团队产品」
-- **公网 SaaS（18）**：当前 Docker + HTTPS 已满足单机公网访问，是否做多租户取决于产品定位
-- **监控告警（19）**：单机部署可用日志 + 健康检查；规模化后再引入指标系统
-
-## 四、变更记录 / Changelog
-
+- 2026-11-22：新增通义千问 Provider，重构 LLM 策略模式与配置结构，图谱同步全量去重建
 - 2026-11-21：完成图谱增量同步、全部前端入口接入、运行时 LLM 配置、备份脚本、前后端测试
 - 2026-11-20：整合重复 P3 段落，修正已完成项状态，补充 Docker 部署与测试进展
 - 2026-11-19：图谱自动同步、SQLite 兼容、文档入库、知识健壮性批次交付

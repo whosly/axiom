@@ -39,25 +39,35 @@ app:
     knowledge-collection: knowledge_base
 
   llm:
-    # Strategy selector: deepseek (only implemented provider for now)
+    # 策略选择：deepseek | qwen / Strategy selector
     provider: ${LLM_PROVIDER:deepseek}
-    deepseek:
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      api-key: ${DEEPSEEK_API_KEY:}
-      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
-      reasoner-model: ${DEEPSEEK_REASONER_MODEL:deepseek-reasoner}
-      temperature: ${DEEPSEEK_TEMPERATURE:0.1}
-      max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
-    # 兼容保留：api embedding 的旧配置（仅当 embedding.provider=api 时使用）
-    embedding:
+    # 所有 OpenAI 兼容厂商共享同一配置结构；新增厂商只需加一个同名块
+    # All OpenAI-compatible vendors share one config shape; add a vendor with one block.
+    providers:
+      deepseek:
+        base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+        api-key: ${DEEPSEEK_API_KEY:}
+        chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+        reasoner-model: ${DEEPSEEK_REASONER_MODEL:deepseek-reasoner}
+        temperature: ${DEEPSEEK_TEMPERATURE:0.1}
+        max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
+      qwen:
+        # 阿里云百炼 OpenAI 兼容模式 / DashScope OpenAI-compatible mode
+        base-url: ${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+        api-key: ${QWEN_API_KEY:}
+        chat-model: ${QWEN_CHAT_MODEL:qwen-plus}
+        reasoner-model: ${QWEN_REASONER_MODEL:qwen-max}
+        temperature: ${QWEN_TEMPERATURE:0.1}
+        max-tokens: ${QWEN_MAX_TOKENS:4096}
+  # Embedding 策略：默认本地 ONNX，零外部依赖 / Default local ONNX, zero external dependency
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:local}
+    # 远程 API 配置（provider=api 时生效）/ Remote API config (when provider=api)
+    api:
       base-url: ${EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
       api-key: ${EMBEDDING_API_KEY:}
       model: ${EMBEDDING_MODEL:BAAI/bge-m3}
       dimension: ${EMBEDDING_DIMENSION:512}
-
-  # Embedding 策略：默认本地 ONNX，零外部依赖 / Default local ONNX, zero external dependency
-  embedding:
-    provider: ${EMBEDDING_PROVIDER:local}
     local:
       model-path: ${EMBEDDING_MODEL_PATH:./data/models/bge-small-zh-v1.5/model.onnx}
       vocab-path: ${EMBEDDING_VOCAB_PATH:./data/models/bge-small-zh-v1.5/vocab.txt}

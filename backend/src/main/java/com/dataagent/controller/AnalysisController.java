@@ -40,13 +40,16 @@ public class AnalysisController {
                 "llmProvider", llmFactory.current().providerName());
     }
 
+    /**
+     * 已注册 LLM 厂商列表（动态，新增 provider 自动出现）/ Registered LLM providers (dynamic).
+     *
+     * @return 模型选项与当前默认值 / Model options and current default
+     */
     @GetMapping("/models")
     public Map<String, Object> models() {
         return Map.of(
-                "models", List.of(
-                        Map.of("modelId", "deepseek-chat", "name", "DeepSeek Chat"),
-                        Map.of("modelId", "deepseek-reasoner", "name", "DeepSeek Reasoner")),
-                "defaultModel", "deepseek-chat");
+                "models", llmFactory.options(),
+                "defaultModel", llmFactory.current().providerName());
     }
 
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE,

@@ -1,6 +1,5 @@
 package com.dataagent.rerank;
 
-import com.dataagent.config.AppProperties;
 import com.dataagent.llm.LlmProvider;
 import com.dataagent.llm.LlmProviderFactory;
 import com.dataagent.llm.LlmProvider.ChatOptions;
@@ -28,7 +27,6 @@ import java.util.List;
 public class LlmRerankProvider implements RerankProvider {
 
     private final LlmProviderFactory llmFactory;
-    private final AppProperties props;
     private final ObjectMapper mapper;
 
     @Override
@@ -50,7 +48,7 @@ public class LlmRerankProvider implements RerankProvider {
             }
 
             LlmProvider llm = llmFactory.current();
-            String model = props.getLlm().getDeepseek().getChatModel();
+            String model = llm.chatModel();
             String response = llm.chat(List.of(ChatMessage.user(prompt.toString())),
                     new ChatOptions(model, 0.0, 512, true));
 

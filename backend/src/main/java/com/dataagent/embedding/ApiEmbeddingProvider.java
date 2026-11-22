@@ -42,7 +42,7 @@ public class ApiEmbeddingProvider implements EmbeddingProvider {
 
     @Override
     public float[] embed(String text) {
-        var emb = props.getLlm().getEmbedding();
+        var emb = props.getEmbedding().getApi();
         ObjectNode body = mapper.createObjectNode();
         body.put("model", emb.getModel());
         body.put("input", text);
@@ -76,5 +76,5 @@ public class ApiEmbeddingProvider implements EmbeddingProvider {
     }
 
     @Override
-    public int dimension() { return props.getLlm().getEmbedding().getDimension(); }
+    public int dimension() { return props.getEmbedding().getApi().getDimension(); }
 }

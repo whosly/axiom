@@ -37,7 +37,7 @@ function App() {
   const [configOpen, setConfigOpen] = useState(false);
   // 可用模型列表（来自 /api/models），避免硬编码 / Available models from API instead of hardcoding
   const [models, setModels] = useState<Array<{ modelId: string; name: string }>>([]);
-  const [selectedModel, setSelectedModel] = useState('deepseek-chat');
+  const [selectedModel, setSelectedModel] = useState('deepseek');
   // 用 ref 持有 AbortController，保证 stop 按钮能中断正在进行的 SSE 请求
   // Hold the AbortController in a ref so the stop button can cancel the in-flight SSE request.
   const abortRef = useRef<AbortController | null>(null);
@@ -68,9 +68,21 @@ function App() {
     // 加载模型列表，失败时保持默认模型 / Load models; keep default on failure.
     api.models().then(m => {
       setModels(m.models);
-      setSelectedModel(m.defaultModel || m.models[0]?.modelId || 'deepseek-chat');
+      setSelectedModel(m.defaultModel || m.models[0]?.modelId || 'deepseek');
     }).catch(e => console.error('load models failed', e));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 切换 LLM 厂商（热更新后端配置）/ Switch LLM provider via runtime config. */
+  const switchProvider = async (provider: string) => {
+    const previous = selectedModel;
+    setSelectedModel(provider);
+    try {
+      await api.updateLlmConfig({ provider });
+    } catch (e) {
+      setSelectedModel(previous);
+      alert('切换模型失败 / Failed: ' + (e as Error).message);
+    }
+  };
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   useEffect(() => {
@@ -308,7 +320,7 @@ function App() {
               <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: 'var(--td-text-color-secondary)' }}>
                 <span>模型 / Model</span>
                 <Select size="small" value={selectedModel} disabled={isLoading}
-                  onChange={v => setSelectedModel(v as string)}
+                  onChange={v => switchProvider(v as string)}
                   options={models.map(m => ({ label: m.name, value: m.modelId }))} style={{ width: 200 }} />
                 <Button size="small" variant="text" onClick={() => setConfigOpen(true)}>配置 / Config</Button>
               </div>
