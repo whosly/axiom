@@ -100,6 +100,17 @@ java -jar target/data-analysis-agent-1.0.0.jar
 
 ![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example2.png)
 
+### 运行测试与覆盖率 / Tests & Coverage
+
+```bash
+cd backend && mvn test          # 后端 64 个测试；覆盖率报告在 target/site/jacoco/index.html
+cd frontend && npm test         # 前端 13 个测试（SSE 解析）
+cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
+```
+
+当前覆盖率：后端行覆盖 **31.9%**（分支 27.5%）、前端 `sse.ts` **100%**。
+后端未覆盖部分主要是依赖真实数据库/ONNX 模型/Zvec native 的集成型代码。
+
 ## API 概览
 
 | 方法 | 路径 | 说明 |
