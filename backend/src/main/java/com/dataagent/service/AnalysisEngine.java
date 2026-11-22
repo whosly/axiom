@@ -114,15 +114,7 @@ public class AnalysisEngine {
         result.setChart(new ChartSpec(ChartType.LINE.getValue(), "period", List.of("value"),
                 plan.getTitle() != null ? plan.getTitle() : metric + " " + granularity.getLabel() + "趋势", rows));
 
-        List<String> insights = new ArrayList<>();
-        if (rows.size() >= 2) {
-            Object first = rows.get(0).get("value"), last = rows.get(rows.size() - 1).get("value");
-            if (first instanceof Number a && last instanceof Number b && a.doubleValue() != 0) {
-                double change = (b.doubleValue() - a.doubleValue()) / Math.abs(a.doubleValue()) * 100;
-                insights.add(String.format("%s内 %s 从 %.2f 变化至 %.2f，累计变化 %.1f%%",
-                        granularity.getLabel(), metric, a.doubleValue(), b.doubleValue(), change));
-            }
-        }
+        List<String> insights = trendInsights(rows, metric, granularity.getLabel());
         result.setInsights(insights);
         return result;
     }
@@ -156,6 +148,47 @@ public class AnalysisEngine {
         }
         result.setInsights(insights);
         return result;
+    }
+
+    /**
+     * 趋势洞察：首尾变化 + 峰谷 + 波动幅度 / Trend insights: endpoints, peak/trough and volatility.
+     *
+     * <p>只看首尾会掩盖中间波动（如 48900→48300 看似平稳，实际峰值 66600、谷值 12450），
+     * 因此补充峰谷位置与极差占比，避免结论误导。
+     * Endpoint-only comparison hides mid-series swings; include peak/trough and range ratio
+     * so the conclusion cannot mislead.
+     */
+    private List<String> trendInsights(List<Map<String, Object>> rows, String metric, String granularityLabel) {
+        List<String> insights = new ArrayList<>();
+        if (rows.size() < 2) return insights;
+
+        Object first = rows.get(0).get("value"), last = rows.get(rows.size() - 1).get("value");
+        if (!(first instanceof Number) || !(last instanceof Number)) return insights;
+        double a = ((Number) first).doubleValue(), b = ((Number) last).doubleValue();
+        if (a != 0) {
+            double change = (b - a) / Math.abs(a) * 100;
+            insights.add(String.format("%s内 %s 从 %.2f 变化至 %.2f，累计变化 %.1f%%",
+                    granularityLabel, metric, a, b, change));
+        }
+
+        // 峰谷与波动幅度 / Peak, trough and range ratio.
+        int maxIdx = 0, minIdx = 0;
+        double max = a, min = a;
+        for (int i = 1; i < rows.size(); i++) {
+            Object v = rows.get(i).get("value");
+            if (!(v instanceof Number)) continue;
+            double d = ((Number) v).doubleValue();
+            if (d > max) { max = d; maxIdx = i; }
+            if (d < min) { min = d; minIdx = i; }
+        }
+        String maxPeriod = String.valueOf(rows.get(maxIdx).get("period"));
+        String minPeriod = String.valueOf(rows.get(minIdx).get("period"));
+        insights.add(String.format("最高 %.2f（%s），最低 %.2f（%s），极差 %.2f",
+                max, maxPeriod, min, minPeriod, max - min));
+        double baseline = Math.abs(a) > 0 ? Math.abs(a) : 1;
+        insights.add(String.format("期间波动幅度约 %.1f%%（相对首期），存在明显起伏",
+                (max - min) / baseline * 100));
+        return insights;
     }
 
     /** Z-score + IQR 双准则异常检测 / Anomaly detection via z-score and IQR. */

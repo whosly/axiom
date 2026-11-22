@@ -109,10 +109,11 @@ public class AppProperties {
         /** 数据集语义 collection 名称 / Name of the dataset-semantics collection. */
         private String collection = "dataset_semantics";
 
-        /** 知识库 collection 存储路径 / Storage path of the knowledge-base collection. */
-        private String knowledgePath = "./data/zvec/knowledge_base";
+        /** 知识库 collection 存储路径（v2 增加 FTS 索引，路径带版本便于迁移）
+         *  Storage path (v2 adds FTS index; version suffix enables migration). */
+        private String knowledgePath = "./data/zvec/knowledge_base_v2";
         /** 知识库 collection 名称 / Name of the knowledge-base collection. */
-        private String knowledgeCollection = "knowledge_base";
+        private String knowledgeCollection = "knowledge_base_v2";
     }
 
     @Data

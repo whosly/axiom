@@ -84,7 +84,7 @@ ENV DATA_DIR=/app/data \
     H2_URL='jdbc:h2:file:/app/data/h2/metadata;AUTO_SERVER=TRUE' \
     SQLITE_URL='jdbc:sqlite:/app/data/sqlite/metadata.db' \
     ZVEC_PATH=/app/data/zvec/dataset_semantics \
-    ZVEC_KNOWLEDGE_PATH=/app/data/zvec/knowledge_base \
+    ZVEC_KNOWLEDGE_PATH=/app/data/zvec/knowledge_base_v2 \
     EMBEDDING_PROVIDER=local \
     EMBEDDING_MODEL_PATH=/app/data/models/bge-small-zh-v1.5/model.onnx \
     EMBEDDING_VOCAB_PATH=/app/data/models/bge-small-zh-v1.5/vocab.txt \

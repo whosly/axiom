@@ -112,7 +112,7 @@ Runtime data is mounted at `/app/data` via volume `data-agent-data`：
 ├── h2/metadata.mv.db           元数据 / Metadata
 ├── duckdb/analysis.duckdb      原始数据集 / Raw datasets
 ├── zvec/dataset_semantics/     数据集语义向量 / Dataset vectors
-├── zvec/knowledge_base/        知识库向量 / Knowledge vectors
+├── zvec/knowledge_base_v2/     知识库向量（含 FTS 索引）/ Knowledge vectors with FTS
 └── models/bge-small-zh-v1.5/   本地 embedding 模型 / Local model
 ```
 

@@ -41,6 +41,9 @@ public class KnowledgeVectorStore {
     /** collection 是否就绪 / Whether the collection is ready. */
     private boolean ready = false;
 
+    /** 新建 collection（首次/迁移）需要全量重建向量 / Newly created collection needs a full reindex. */
+    private volatile boolean needsFullReindex = false;
+
     private final AppProperties props;
     private final EmbeddingProviderFactory embeddingFactory;
     private final ZvecLifecycle lifecycle;
@@ -73,7 +76,10 @@ public class KnowledgeVectorStore {
                 log.info("[KnowledgeVector] opened existing collection at {}", dir.toAbsolutePath());
             } else {
                 collection = Zvec.createAndOpen(dir.toString(), schema, null);
-                log.info("[KnowledgeVector] created collection at {}", dir.toAbsolutePath());
+                // 新建 collection 没有历史向量，标记启动后全量重建 / New collection is empty; flag a full reindex.
+                needsFullReindex = true;
+                log.info("[KnowledgeVector] created collection at {} (full reindex will follow)",
+                        dir.toAbsolutePath());
             }
             schema.close();
             ready = true;
@@ -100,7 +106,18 @@ public class KnowledgeVectorStore {
         // Scalar fields: kind/title/content/sourceId/datasetId are filterable or returned.
         schema.addField(new FieldSchema("kind", DataType.STRING, true, 0));
         schema.addField(new FieldSchema("title", DataType.STRING, true, 0));
-        schema.addField(new FieldSchema("content", DataType.STRING, true, 0));
+
+        // content 必须建 FTS 索引：hybridSearch 的 jieba 全文召回子查询要求该字段
+        // 具备 FTS 索引，否则查询报 "fts requires an FTS-indexed field"。
+        // tokenizer 用 Zvec 内置的 "jieba"（中文分词），filters 传空数组。
+        // content needs an FTS index: the jieba FTS sub-query requires it, otherwise
+        // "fts requires an FTS-indexed field" is thrown. Use Zvec's built-in "jieba".
+        FieldSchema contentField = new FieldSchema("content", DataType.STRING, true, 0);
+        try (IndexParams fts = IndexParams.createFTS("jieba", new String[0], null)) {
+            contentField.setIndexParams(fts);
+        }
+        schema.addField(contentField);
+
         schema.addField(new FieldSchema("sourceId", DataType.STRING, true, 0));
         schema.addField(new FieldSchema("datasetId", DataType.STRING, true, 0));
         schema.addField(new FieldSchema("tags", DataType.STRING, true, 0));
@@ -326,6 +343,9 @@ public class KnowledgeVectorStore {
     }
 
     public boolean isReady() { return ready; }
+
+    /** 是否需要启动后全量重建向量 / Whether a full reindex is needed at startup. */
+    public boolean isNeedsFullReindex() { return needsFullReindex; }
 
     /**
      * 暴露 collection 供检视工具只读查看 / Expose the collection for read-only inspection.

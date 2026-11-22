@@ -106,6 +106,28 @@ class AnalysisEngineTest {
         assertThat(sql.getValue()).contains(TimeGranularity.MONTH.getFormat());
     }
 
+    /** 趋势洞察应包含峰谷与波动，避免只看首尾误导 / Trend insights include peak/trough and volatility. */
+    @Test
+    @DisplayName("趋势：洞察含最高/最低与波动幅度")
+    void trendInsightsIncludePeaks() {
+        when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of(
+                Map.of("period", "2026-01", "value", 48900.0),
+                Map.of("period", "2026-03", "value", 12450.0),
+                Map.of("period", "2026-04", "value", 66600.0),
+                Map.of("period", "2026-05", "value", 48300.0)));
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.TREND);
+        plan.setMetrics(List.of("amount"));
+        plan.setTimeColumn("dt");
+
+        AnalysisResult result = engine.execute(dataset, plan);
+
+        assertThat(result.getInsights()).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(result.getInsights()).anySatisfy(s -> assertThat(s).contains("最高 66600.00（2026-04）"));
+        assertThat(result.getInsights()).anySatisfy(s -> assertThat(s).contains("最低 12450.00（2026-03）"));
+        assertThat(result.getInsights()).anySatisfy(s -> assertThat(s).contains("波动幅度"));
+    }
+
     /**
      * 对比意图缺少维度时自动选用首个类别列，保证仍可做维度对比。
      * Compare intent falls back to the first categorical column when no dimension is given.

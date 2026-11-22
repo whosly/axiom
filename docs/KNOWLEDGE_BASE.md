@@ -50,7 +50,7 @@ All sources normalize to `KnowledgeEntry`, sharing two storage layers:
             │
        KnowledgeEntry
        ├─ KnowledgeRepository  (H2/SQLite 元数据 + 倒排索引)
-       └─ KnowledgeVectorStore (Zvec knowledge_base)
+       └─ KnowledgeVectorStore (Zvec knowledge_base_v2)
 ```
 
 新增来源只需加适配器，存储和检索层不重复开发。
@@ -70,19 +70,21 @@ backend/data/
 │   └── analysis.duckdb
 └── zvec/                     Zvec 向量库
     ├── dataset_semantics/    collection 1：字段/历史/结论
-    └── knowledge_base/       collection 2：知识条目
+    └── knowledge_base_v2/    collection 2：知识条目（content 字段含 jieba FTS 索引）
 ```
 
 - 目录由 `DataSourceConfig.ensureParentDir()` 和 `ZvecLifecycle` 自动创建
 - Zvec 的 collection 目录**本身**必须不存在才能 `createAndOpen`（首次）；存在时走 `open`（重启）
-- 迁移旧数据：把 `data/metadata.mv.db` → `data/h2/`，`data/analysis.duckdb` → `data/duckdb/`，`data/vectors` → `data/zvec/dataset_semantics`，`data/knowledge_vectors` → `data/zvec/knowledge_base`
+- `knowledge_base_v2` 相比旧 `knowledge_base` 为 `content` 字段增加了 **jieba FTS 索引**，
+  混合检索的全文召回分支才能生效。首次启动检测到新 collection 为空时会自动全量 reindex。
+  旧目录 `knowledge_base/` 可安全删除。
 
 ## 5. 双 Collection 与生命周期 / Dual Collections & Lifecycle
 
 | Collection | 路径 | 用途 |
 |---|---|---|
 | `dataset_semantics` | `data/zvec/dataset_semantics` | 字段语义 / 历史问答 / 结论 |
-| `knowledge_base` | `data/zvec/knowledge_base` | 知识条目 |
+| `knowledge_base_v2` | `data/zvec/knowledge_base_v2` | 知识条目（向量 + jieba FTS）|
 
 `ZvecLifecycle` 独占 `Zvec.initialize()/shutdown()`，两个服务共享，避免 native 库重复初始化异常。
 
@@ -248,7 +250,7 @@ app:
     enabled: true
     dimension: 1024
     path: ./data/zvec/dataset_semantics
-    knowledge-path: ./data/zvec/knowledge_base
+    knowledge-path: ./data/zvec/knowledge_base_v2
   llm:
     deepseek: { api-key: ${DEEPSEEK_API_KEY:} }
     embedding: { base-url: https://api.siliconflow.cn/v1, api-key: ${EMBEDDING_API_KEY:}, model: BAAI/bge-m3 }

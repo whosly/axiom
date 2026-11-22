@@ -18,9 +18,11 @@ import org.springframework.stereotype.Component;
 public class KnowledgeStartupSync {
 
     private final KnowledgeService knowledgeService;
+    private final KnowledgeVectorStore vectorStore;
 
-    public KnowledgeStartupSync(KnowledgeService knowledgeService) {
+    public KnowledgeStartupSync(KnowledgeService knowledgeService, KnowledgeVectorStore vectorStore) {
         this.knowledgeService = knowledgeService;
+        this.vectorStore = vectorStore;
     }
 
     /**
@@ -33,14 +35,18 @@ public class KnowledgeStartupSync {
     public void retryPendingVectors() {
         new Thread(() -> {
             try {
-                java.util.Map<String, Object> result = knowledgeService.reindex(false);
+                // 新建/迁移的 collection 是空的，需全量重建；否则只重试失败条目。
+                // A newly created (migrated) collection is empty: rebuild all; otherwise retry failures.
+                boolean force = vectorStore.isNeedsFullReindex();
+                if (force) log.info("[StartupSync] new collection detected, full reindex");
+                java.util.Map<String, Object> result = knowledgeService.reindex(force);
                 int total = (int) result.getOrDefault("total", 0);
                 if (total > 0) {
-                    log.info("[StartupSync] vector retry: total={} success={} failed={}",
-                            total, result.get("success"), result.get("failed"));
+                    log.info("[StartupSync] vector {}: total={} success={} failed={}",
+                            force ? "rebuild" : "retry", total, result.get("success"), result.get("failed"));
                 }
             } catch (Exception e) {
-                log.warn("[StartupSync] vector retry failed: {}", e.getMessage());
+                log.warn("[StartupSync] vector sync failed: {}", e.getMessage());
             }
         }, "knowledge-startup-sync").start();
     }

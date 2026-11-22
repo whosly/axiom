@@ -35,8 +35,8 @@ app:
     dimension: ${ZVEC_DIMENSION:512}
     collection: dataset_semantics
     # 知识库独立 collection / Dedicated collection for knowledge base
-    knowledge-path: ${ZVEC_KNOWLEDGE_PATH:./data/zvec/knowledge_base}
-    knowledge-collection: knowledge_base
+    knowledge-path: ${ZVEC_KNOWLEDGE_PATH:./data/zvec/knowledge_base_v2}
+    knowledge-collection: knowledge_base_v2
 
   llm:
     # 策略选择：deepseek | qwen / Strategy selector

@@ -91,7 +91,7 @@ app:
 
 **重要**：切换模型导致维度变化时，必须删除旧 collection 目录并重建：
 ```bash
-rm -rf backend/data/zvec/dataset_semantics backend/data/zvec/knowledge_base
+rm -rf backend/data/zvec/dataset_semantics backend/data/zvec/knowledge_base_v2
 # 然后重启应用，再 reindex
 ```
 
@@ -170,7 +170,7 @@ backend/data/
 ├── duckdb/analysis.duckdb      # 原始数据
 └── zvec/
     ├── dataset_semantics/      # 字段/历史/结论向量
-    └── knowledge_base/         # 知识向量
+    └── knowledge_base_v2/      # 知识向量（含 jieba FTS 索引）
 ```
 
 ## 9. 与远程 API 方案对比 / Comparison
