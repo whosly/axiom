@@ -6,6 +6,8 @@ import type { KnowledgeEntry, KnowledgeHit, KnowledgeInput } from '../types';
 import { KIND_LABELS } from '../types';
 // 图谱视图依赖 ECharts，按需加载避免进入首屏 bundle / Lazy-load the ECharts-based graph view.
 const KnowledgeGraphView = lazy(() => import('./KnowledgeGraphView').then(m => ({ default: m.KnowledgeGraphView })));
+import { GraphReasoningView } from './GraphReasoningView';
+import { KnowledgeSourcesView } from './KnowledgeSourcesView';
 import { ZvecInspectorView } from './ZvecInspectorView';
 
 /**
@@ -35,7 +37,9 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const [detail, setDetail] = useState<Record<string, any> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   // 视图切换：entries | graph | zvec / View switcher
-  const [view, setView] = useState<'entries' | 'graph' | 'zvec'>('entries');
+  const [view, setView] = useState<'entries' | 'graph' | 'zvec' | 'sources'>('entries');
+  // 图谱子视图：可视化 / 推理 / Graph sub-view: visualization or reasoning
+  const [graphTab, setGraphTab] = useState<'visual' | 'reason'>('visual');
   // 文档上传与向量状态 / Document upload and vector status
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [statusStats, setStatusStats] = useState<Array<Record<string, unknown>>>([]);
@@ -127,8 +131,12 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
         </div>
         <div className="flex items-center gap-1">
           <Button size="small" variant={view === 'entries' ? 'base' : 'text'} onClick={() => setView('entries')}>知识条目</Button>
-          <Button size="small" variant={view === 'graph' ? 'base' : 'text'} onClick={() => setView('graph')}>知识图谱</Button>
+          <Button size="small" variant={view === 'graph' ? 'base' : 'text'}
+            onClick={() => { setView('graph'); setGraphTab('visual'); }}>知识图谱</Button>
+          <Button size="small" variant={view === 'graph' && graphTab === 'reason' ? 'base' : 'text'}
+            onClick={() => { setView('graph'); setGraphTab('reason'); }}>图谱推理</Button>
           <Button size="small" variant={view === 'zvec' ? 'base' : 'text'} onClick={() => setView('zvec')}>Zvec 数据</Button>
+          <Button size="small" variant={view === 'sources' ? 'base' : 'text'} onClick={() => setView('sources')}>来源</Button>
           {view === 'entries' && <>
             <Button size="small" variant="outline" icon={<AddIcon />} onClick={() => setAddOpen(true)}>录入知识</Button>
             <Button size="small" variant="outline" icon={<AddIcon />} loading={busy}
@@ -144,8 +152,12 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
         </div>
       </header>
 
-      {view === 'graph' ? <Suspense fallback={<div className="flex justify-center py-16"><Loading /></div>}><KnowledgeGraphView /></Suspense> :
+      {view === 'graph' ? (
+        graphTab === 'reason' ? <GraphReasoningView /> :
+        <Suspense fallback={<div className="flex justify-center py-16"><Loading /></div>}><KnowledgeGraphView /></Suspense>
+      ) :
        view === 'zvec' ? <ZvecInspectorView /> :
+       view === 'sources' ? <KnowledgeSourcesView /> :
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-4xl mx-auto space-y-6">
           {/* 向量化状态概览 / Vectorization status overview */}

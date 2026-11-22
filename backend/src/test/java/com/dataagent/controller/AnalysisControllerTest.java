@@ -43,7 +43,8 @@ class AnalysisControllerTest {
     /** 构造被测 Controller / Build the controller under test. */
     @BeforeEach
     void setUp() {
-        controller = new AnalysisController(orchestrator, metaRepo, new ObjectMapper(), llmFactory);
+        controller = new AnalysisController(orchestrator, metaRepo, new ObjectMapper(), llmFactory,
+                org.mockito.Mockito.mock(com.dataagent.service.LlmConfigService.class));
     }
 
     /**

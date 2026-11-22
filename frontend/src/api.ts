@@ -1,4 +1,5 @@
 import type { Dataset, ChatSession, SSEEvent, KnowledgeEntry, KnowledgeInput, KnowledgeHit } from './types';
+import { parseSSEBlock } from './sse';
 
 const BASE = '/api';
 
@@ -17,6 +18,13 @@ export const api = {
   // 可用模型列表与默认模型 / Available chat models and the default model
   models: async (): Promise<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }> =>
     json<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }>('/models'),
+
+  // 运行时 LLM 配置 / Runtime LLM configuration
+  getLlmConfig: () => json<Record<string, unknown>>('/config/llm'),
+  updateLlmConfig: (config: Record<string, string>) =>
+    json<Record<string, unknown>>('/config/llm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
+    }),
 
   // ---- 知识库 / Knowledge base ----
   listKnowledge: async (): Promise<{ entries: KnowledgeEntry[]; stats: Array<Record<string, unknown>> }> =>
@@ -56,6 +64,56 @@ export const api = {
   rebuildGraph: () => json<Record<string, unknown>>('/knowledge/graph/rebuild', { method: 'POST' }),
   graphNeighbors: (nodeId: string, hops = 1) =>
     json<Record<string, unknown>>(`/knowledge/graph/neighbors?nodeId=${encodeURIComponent(nodeId)}&hops=${hops}`),
+  graphStats: () => json<{ nodes: number; edges: number; byType: Array<{ type: string; count: number }> }>(
+    '/knowledge/graph/stats'),
+
+  // 图谱推理 / Graph reasoning
+  graphCommunities: (maxIterations = 20) =>
+    json<{ communities: Array<{ size: number; members: Array<{ id: string; label: string }>;
+      typeDistribution: Record<string, number> }>; count: number; iterations: number }>(
+      `/knowledge/graph/reason/communities?maxIterations=${maxIterations}`),
+  graphPath: (from: string, to: string) =>
+    json<{ path: Array<{ id: string; label: string; type: string }>; length: number; reachable: boolean;
+      message?: string }>(
+      `/knowledge/graph/reason/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  graphRelated: (entryId: string, limit = 10) =>
+    json<{ related: Array<{ id: string; label: string; sharedRelations: number }>; count: number }>(
+      `/knowledge/graph/reason/related?entryId=${encodeURIComponent(entryId)}&limit=${limit}`),
+
+  // ---- 知识来源 / Knowledge sources ----
+  listSources: async (): Promise<Array<{
+    id: string; name: string; type: string; description?: string;
+    entryCount: number; status: string; createdAt?: string; updatedAt?: string;
+  }>> => (await json<{ sources: Array<{
+    id: string; name: string; type: string; description?: string;
+    entryCount: number; status: string; createdAt?: string; updatedAt?: string;
+  }> }>('/knowledge/sources')).sources,
+  deleteSource: (sourceId: string) =>
+    json<{ success: boolean; deleted: number }>(`/knowledge/sources/${encodeURIComponent(sourceId)}`,
+      { method: 'DELETE' }),
+
+  // ---- JDBC 数据源 / External datasources ----
+  listDatasources: async (): Promise<Array<{
+    id: string; name: string; type: string; jdbcUrl: string; username: string;
+    status: string; lastTestedAt?: string; createdAt: string;
+  }>> => (await json<{ datasources: Array<{
+    id: string; name: string; type: string; jdbcUrl: string; username: string;
+    status: string; lastTestedAt?: string; createdAt: string;
+  }> }>('/datasources/jdbc')).datasources,
+  registerDatasource: (data: { name: string; type: string; jdbcUrl: string; username: string; password?: string }) =>
+    json<{ datasource: Record<string, unknown> }>('/datasources/jdbc', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    }),
+  testDatasource: (id: string) =>
+    json<{ success: boolean; catalog?: string; majorVersion?: number; error?: string }>(
+      `/datasources/jdbc/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  importDatasource: (id: string, data: { sql: string; limit?: number; name?: string }) =>
+    json<{ datasetId: string; rows: number; columns: number }>(
+      `/datasources/jdbc/${encodeURIComponent(id)}/import`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+      }),
+  deleteDatasource: (id: string) =>
+    json<{ success: boolean }>(`/datasources/jdbc/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // ---- Zvec 数据查看 / Zvec inspection ----
   zvecCollections: () => json<Record<string, unknown>>('/zvec/collections'),
@@ -138,34 +196,9 @@ export const api = {
       const blocks = buffer.split('\n\n');
       buffer = blocks.pop() || '';
       for (const block of blocks) {
-        const lines = block.split('\n');
-        const eventLine = lines.find(l => l.startsWith('event:'));
-        const dataLine = lines.find(l => l.startsWith('data:'));
-        if (!dataLine) continue;
-        try {
-          const data = JSON.parse(dataLine.slice(5).trim());
-          const type = eventLine ? eventLine.slice(6).trim() : 'text';
-          // Named SSE events carry their payload directly in `data`, so map
-          // them into the field the UI expects (data.type holds the intent,
-          // not the SSE event type).
-          let event: SSEEvent;
-          switch (type) {
-            case 'plan':
-              event = { type: 'plan', plan: data } as SSEEvent;
-              break;
-            case 'result':
-              event = { type: 'result', result: data } as SSEEvent;
-              break;
-            case 'chart':
-              event = { type: 'chart', chart: data } as SSEEvent;
-              break;
-            default:
-              event = { type, ...(typeof data === 'object' ? data : { content: data }) } as SSEEvent;
-          }
-          onEvent(event);
-        } catch {
-          // ignore malformed SSE block
-        }
+        // 使用纯函数解析，便于单元测试 / Use the pure parser for testability.
+        const event = parseSSEBlock(block);
+        if (event) onEvent(event);
       }
     }
   },

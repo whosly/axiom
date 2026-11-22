@@ -61,6 +61,31 @@ public class KnowledgeGraphRepository {
         jdbc.update("DELETE FROM kg_nodes");
     }
 
+    /**
+     * 删除某条知识的子图（增量更新用）：删除 knowledge:{id} 节点及其全部出边。
+     * Delete one entry's subgraph for incremental updates: its node and outgoing edges.
+     *
+     * @param entryId 知识条目 ID / Knowledge entry ID.
+     */
+    public void deleteEntrySubgraph(String entryId) {
+        String kid = "knowledge:" + entryId;
+        jdbc.update("DELETE FROM kg_edges WHERE source = ?", kid);
+        jdbc.update("DELETE FROM kg_nodes WHERE id = ?", kid);
+    }
+
+    /**
+     * 清理孤立节点：删除没有任何边相连的 field/tag/dataset/intent 节点，
+     * 保留 knowledge 节点（即使暂时无边）。/ Remove orphan non-knowledge nodes.
+     */
+    public void deleteOrphanNodes() {
+        jdbc.update("""
+            DELETE FROM kg_nodes
+            WHERE type <> 'knowledge'
+              AND id NOT IN (SELECT source FROM kg_edges)
+              AND id NOT IN (SELECT target FROM kg_edges)
+            """);
+    }
+
     /** 增加一个节点 / Add a node. */
     public void addNode(String id, String type, String label) {
         jdbc.update("DELETE FROM kg_nodes WHERE id = ?", id);

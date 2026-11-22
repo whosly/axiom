@@ -4,6 +4,7 @@ import com.dataagent.llm.LlmProviderFactory;
 import com.dataagent.model.*;
 import com.dataagent.repository.MetadataRepository;
 import com.dataagent.service.AnalysisOrchestrator;
+import com.dataagent.service.LlmConfigService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,7 @@ public class AnalysisController {
     private final MetadataRepository metaRepo;
     private final ObjectMapper mapper;
     private final LlmProviderFactory llmFactory;
+    private final LlmConfigService llmConfigService;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -181,11 +183,25 @@ public class AnalysisController {
         return Map.of("success", true);
     }
 
+    /**
+     * 查询当前 LLM 配置（脱敏）/ Get current LLM config (masked).
+     *
+     * @return 配置映射 / Configuration map
+     */
+    @GetMapping("/config/llm")
+    public Map<String, Object> getLlmConfig() {
+        return llmConfigService.current();
+    }
+
+    /**
+     * 运行时更新 LLM 配置，立即生效 / Update LLM config at runtime with immediate effect.
+     *
+     * @param body 配置项 / Configuration items
+     * @return 更新后的脱敏配置 / Updated masked configuration
+     */
     @PostMapping("/config/llm")
     public Map<String, Object> updateLlmConfig(@RequestBody Map<String, String> body) {
-        // Runtime override via environment-style setter is intentionally omitted;
-        // configuration is managed through application.yml / environment variables.
-        return Map.of("success", true, "note", "请在 application.yml 或环境变量中配置模型参数");
+        return llmConfigService.update(body);
     }
 
     private void send(SseEmitter emitter, String type, Object data) {

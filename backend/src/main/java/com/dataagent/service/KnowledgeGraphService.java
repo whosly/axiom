@@ -40,39 +40,8 @@ public class KnowledgeGraphService {
      */
     public Map<String, Object> rebuild() {
         graphRepo.clear();
-        List<KnowledgeEntry> entries = knowledgeRepo.listAll();
-
-        for (KnowledgeEntry e : entries) {
-            String kid = "knowledge:" + e.getId();
-            graphRepo.addNode(kid, "knowledge", e.getTitle());
-
-            // knowledge -> dataset / 知识所属数据集.
-            if (e.getDatasetId() != null && !e.getDatasetId().isBlank()) {
-                String did = "dataset:" + e.getDatasetId();
-                graphRepo.addNode(did, "dataset", e.getDatasetId());
-                graphRepo.addEdge(kid, did, "belongs_to");
-            }
-
-            // knowledge -> field / 指标引用的字段.
-            if (e.getFields() != null) {
-                for (String field : e.getFields()) {
-                    if (field == null || field.isBlank()) continue;
-                    String fid = "field:" + field.trim();
-                    graphRepo.addNode(fid, "field", field.trim());
-                    graphRepo.addEdge(kid, fid, "references");
-                }
-            }
-
-            // knowledge -> tag / 标签；case 的 tag 视为意图 / Tags; case tags are intents.
-            if (e.getTags() != null) {
-                for (String tag : e.getTags()) {
-                    if (tag == null || tag.isBlank()) continue;
-                    boolean isIntent = "case".equals(e.getKind());
-                    String tid = (isIntent ? "intent:" : "tag:") + tag.trim();
-                    graphRepo.addNode(tid, isIntent ? "intent" : "tag", tag.trim());
-                    graphRepo.addEdge(kid, tid, isIntent ? "has_intent" : "tagged");
-                }
-            }
+        for (KnowledgeEntry e : knowledgeRepo.listAll()) {
+            buildEntryGraph(e);
         }
         Map<String, Object> stats = graphRepo.stats();
         log.info("[KnowledgeGraph] rebuilt: {}", stats);
@@ -80,14 +49,50 @@ public class KnowledgeGraphService {
     }
 
     /**
+     * 为单条知识写入图谱子图（增量与全量共用）/ Write one entry's subgraph (shared by incremental and full rebuild).
+     *
+     * @param e 知识条目 / Knowledge entry.
+     */
+    private void buildEntryGraph(KnowledgeEntry e) {
+        String kid = "knowledge:" + e.getId();
+        graphRepo.addNode(kid, "knowledge", e.getTitle());
+
+        // knowledge -> dataset / 知识所属数据集.
+        if (e.getDatasetId() != null && !e.getDatasetId().isBlank()) {
+            String did = "dataset:" + e.getDatasetId();
+            graphRepo.addNode(did, "dataset", e.getDatasetId());
+            graphRepo.addEdge(kid, did, "belongs_to");
+        }
+
+        // knowledge -> field / 指标引用的字段.
+        if (e.getFields() != null) {
+            for (String field : e.getFields()) {
+                if (field == null || field.isBlank()) continue;
+                String fid = "field:" + field.trim();
+                graphRepo.addNode(fid, "field", field.trim());
+                graphRepo.addEdge(kid, fid, "references");
+            }
+        }
+
+        // knowledge -> tag / 标签；case 的 tag 视为意图 / Tags; case tags are intents.
+        if (e.getTags() != null) {
+            for (String tag : e.getTags()) {
+                if (tag == null || tag.isBlank()) continue;
+                boolean isIntent = "case".equals(e.getKind());
+                String tid = (isIntent ? "intent:" : "tag:") + tag.trim();
+                graphRepo.addNode(tid, isIntent ? "intent" : "tag", tag.trim());
+                graphRepo.addEdge(kid, tid, isIntent ? "has_intent" : "tagged");
+            }
+        }
+    }
+
+    /**
      * 监听知识变更事件，自动重建图谱 / Auto-rebuild graph on knowledge-change events.
      *
-     * <p>知识条目增删改时由 KnowledgeService 发布事件，这里自动同步图谱，
-     * 避免"知识改了图谱没更新"的不一致。当前实现用全量重建保证正确性；
-     * 图谱规模增大后可优化为按 entryId 增量更新。
-     * / KnowledgeService publishes events on entry changes; here we auto-sync the graph,
-     * avoiding inconsistency. Currently a full rebuild for correctness; can be optimized
-     * to incremental updates by entryId as the graph grows.
+     * <p>知识条目增删改时由 KnowledgeService 发布事件，这里自动同步图谱。
+     * ADD/DELETE 按 entryId 增量更新（删旧子图再写新子图），BATCH/REINDEX 走全量重建。
+     * / KnowledgeService publishes events on entry changes; ADD/DELETE sync incrementally
+     * by entryId (remove old subgraph then write new), while BATCH/REINDEX do a full rebuild.
      *
      * @param event 知识变更事件 / Knowledge-change event.
      */
@@ -95,7 +100,27 @@ public class KnowledgeGraphService {
     public void onKnowledgeChanged(KnowledgeChangedEvent event) {
         log.info("[KnowledgeGraph] auto-sync triggered: type={} entryId={}",
                 event.getChangeType(), event.getEntryId());
-        rebuild();
+        var type = event.getChangeType();
+        String entryId = event.getEntryId();
+
+        // 批量与重建：全量更划算 / Batch and reindex are cheaper as a full rebuild.
+        if (type == KnowledgeChangedEvent.ChangeType.BATCH
+                || type == KnowledgeChangedEvent.ChangeType.REINDEX
+                || entryId == null || entryId.isBlank()) {
+            rebuild();
+            return;
+        }
+
+        // 增量：先删旧子图，ADD 时再从元数据读取最新条目重建
+        // Incremental: remove the old subgraph, then rebuild from metadata for ADD.
+        graphRepo.deleteEntrySubgraph(entryId);
+        if (type == KnowledgeChangedEvent.ChangeType.ADD) {
+            KnowledgeEntry entry = knowledgeRepo.findById(entryId);
+            if (entry != null) buildEntryGraph(entry);
+        }
+        // 清理因删除而孤立的 field/tag 节点 / Clean up orphaned field/tag nodes.
+        graphRepo.deleteOrphanNodes();
+        log.info("[KnowledgeGraph] incremental sync done: type={} entryId={}", type, entryId);
     }
 
     /** 列出全部节点 / List all nodes. */

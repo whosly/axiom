@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Select, Tooltip, Loading, Tag } from 'tdesign-react';
-import { RefreshIcon, SunnyIcon, MoonIcon, SendIcon, StopIcon, ChatIcon, DeleteIcon, BookIcon } from 'tdesign-icons-react';
+import { Button, Select, Tooltip, Loading, Tag, Dialog, Input } from 'tdesign-react';
+import { RefreshIcon, SunnyIcon, MoonIcon, SendIcon, StopIcon, ChatIcon, DeleteIcon, BookIcon, EditIcon } from 'tdesign-icons-react';
 import '@tdesign-react/chat/es/style/index.js';
 
 import { api } from './api';
@@ -9,6 +9,7 @@ import type { Dataset, ChatSession, ChatMessage, SSEEvent } from './types';
 import { DatasetPanel } from './components/DatasetPanel';
 import { AnalysisMessage } from './components/AnalysisMessage';
 import { KnowledgePanel } from './components/KnowledgePanel';
+import { LlmConfigPanel } from './components/LlmConfigPanel';
 
 const SUGGESTIONS = [
   '分析销售额的变化趋势',
@@ -29,6 +30,11 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [dark, setDark] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
+  // 会话重命名 / Session rename dialog
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTitle, setRenameTitle] = useState('');
+  // LLM 运行时配置 / Runtime LLM config dialog
+  const [configOpen, setConfigOpen] = useState(false);
   // 可用模型列表（来自 /api/models），避免硬编码 / Available models from API instead of hardcoding
   const [models, setModels] = useState<Array<{ modelId: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState('deepseek-chat');
@@ -166,6 +172,16 @@ function App() {
     abortRef.current?.abort();
   };
 
+  /** 重命名当前会话 / Rename the current session. */
+  const renameSession = async () => {
+    if (!currentSessionId || !renameTitle.trim()) return;
+    try {
+      await api.renameSession(currentSessionId, renameTitle.trim());
+      setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, title: renameTitle.trim() } : s));
+      setRenameOpen(false);
+    } catch (e) { alert('重命名失败 / Failed: ' + (e as Error).message); }
+  };
+
   const handleDatasetCreated = (d: Dataset) => {
     setDatasets(prev => [d, ...prev.filter(x => x.id !== d.id)]);
     setSelectedDatasetId(d.id);
@@ -214,14 +230,24 @@ function App() {
               onChange={v => v && openSession(v as string)}
               options={sessions.map(s => ({ label: s.title, value: s.id }))} />
             {currentSessionId && (
-              <Tooltip content="删除当前会话">
-                <Button variant="text" size="small" icon={<DeleteIcon />}
-                  onClick={async () => {
-                    await api.deleteSession(currentSessionId);
-                    setSessions(prev => prev.filter(s => s.id !== currentSessionId));
-                    startNewChat();
-                  }} />
-              </Tooltip>
+              <>
+                <Tooltip content="重命名当前会话">
+                  <Button variant="text" size="small" icon={<EditIcon />}
+                    onClick={() => {
+                      const s = sessions.find(x => x.id === currentSessionId);
+                      setRenameTitle(s?.title || '');
+                      setRenameOpen(true);
+                    }} />
+                </Tooltip>
+                <Tooltip content="删除当前会话">
+                  <Button variant="text" size="small" icon={<DeleteIcon />}
+                    onClick={async () => {
+                      await api.deleteSession(currentSessionId);
+                      setSessions(prev => prev.filter(s => s.id !== currentSessionId));
+                      startNewChat();
+                    }} />
+                </Tooltip>
+              </>
             )}
             <Tooltip content="刷新数据集">
               <Button variant="text" size="small" icon={<RefreshIcon />} onClick={loadDatasets} />
@@ -284,6 +310,7 @@ function App() {
                 <Select size="small" value={selectedModel} disabled={isLoading}
                   onChange={v => setSelectedModel(v as string)}
                   options={models.map(m => ({ label: m.name, value: m.modelId }))} style={{ width: 200 }} />
+                <Button size="small" variant="text" onClick={() => setConfigOpen(true)}>配置 / Config</Button>
               </div>
             )}
             <div className="flex gap-2 items-end">
@@ -315,6 +342,17 @@ function App() {
        </>
        )}
       </main>
+
+      {/* 重命名会话对话框 / Rename session dialog */}
+      <Dialog header="重命名会话 / Rename Session" visible={renameOpen}
+        onClose={() => setRenameOpen(false)} onConfirm={renameSession}
+        confirmBtn={{ content: '保存 / Save' }}>
+        <Input value={renameTitle} onChange={v => setRenameTitle(v as string)}
+          placeholder="输入新标题 / New title" onEnter={() => renameSession()} />
+      </Dialog>
+
+      <LlmConfigPanel visible={configOpen} onClose={() => setConfigOpen(false)}
+        onUpdated={() => api.models().then(m => setModels(m.models)).catch(() => {})} />
     </div>
   );
 }

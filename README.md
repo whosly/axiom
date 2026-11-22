@@ -140,19 +140,26 @@ data-analysis-agent/
 ├── Dockerfile                # 多阶段构建（前端 + 后端 + 模型）
 ├── docker-compose.yml        # 基础服务编排
 ├── docker-compose.prod.yml   # 公网 HTTPS overlay
-├── scripts/                  # 部署脚本集中目录
+├── scripts/                  # 脚本集中目录
 │   ├── docker-deploy.sh      # Docker 一键部署（推荐）
-│   └── local-deploy.sh       # 本地 jar 常驻部署（无 Docker）
+│   ├── local-deploy.sh       # 本地 jar 常驻部署（无 Docker）
+│   └── backup.sh             # 数据备份与恢复
 ├── nginx/                    # 反向代理配置与证书目录
 ├── .env.example              # 环境变量模板
 ├── frontend/          # React 前端
 │   └── src/
 │       ├── App.tsx              # 主应用与 SSE 交互
 │       ├── api.ts               # API 客户端
+│       ├── sse.ts               # SSE 块解析（纯函数，可单测）
 │       ├── components/
 │       │   ├── DatasetPanel.tsx    # 数据集管理
+│       │   ├── DatasourcePanel.tsx # JDBC 数据源管理
 │       │   ├── AnalysisMessage.tsx # 分析结果渲染
-│       │   └── AnalysisChart.tsx   # ECharts 图表
+│       │   ├── AnalysisChart.tsx   # ECharts 图表
+│       │   ├── KnowledgePanel.tsx  # 知识库五视图
+│       │   ├── GraphReasoningView.tsx # 图谱推理
+│       │   └── LlmConfigPanel.tsx  # 运行时模型配置
+│       ├── __tests__/            # 前端单元测试
 │       └── types.ts
 └── backend/           # Spring Boot 后端
     └── src/main/java/com/dataagent/

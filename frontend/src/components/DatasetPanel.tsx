@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import { Button, Dialog, Textarea, Input, Loading, Tag } from 'tdesign-react';
-import { UploadIcon, AddIcon, FileCopyIcon, DeleteIcon, ChartBarIcon } from 'tdesign-icons-react';
+import { UploadIcon, AddIcon, FileCopyIcon, DeleteIcon, ChartBarIcon, CloudIcon } from 'tdesign-icons-react';
 import type { Dataset } from '../types';
 import { api } from '../api';
+import { DatasourcePanel } from './DatasourcePanel';
 
 interface Props {
   datasets: Dataset[];
@@ -30,6 +31,7 @@ export function DatasetPanel({
   const [pasteName, setPasteName] = useState('粘贴数据');
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ dataset: Dataset; rows: Array<Record<string, unknown>> } | null>(null);
+  const [datasourceOpen, setDatasourceOpen] = useState(false);
 
   const handleUpload = async (file: File) => {
     setBusy(true);
@@ -108,6 +110,8 @@ export function DatasetPanel({
           <Button size="small" variant="outline" icon={<AddIcon />} onClick={() => setPasteOpen(true)}>粘贴</Button>
           <Button size="small" variant="outline" icon={<FileCopyIcon />} onClick={handleSample}>示例</Button>
         </div>
+        <Button size="small" variant="text" icon={<CloudIcon />} className="w-full mt-1"
+          onClick={() => setDatasourceOpen(true)}>数据库直连 / JDBC</Button>
         <input
           ref={fileRef}
           type="file"
@@ -224,6 +228,9 @@ export function DatasetPanel({
           </div>
         )}
       </Dialog>
+
+      <DatasourcePanel visible={datasourceOpen} onClose={() => setDatasourceOpen(false)}
+        onImported={onCreated} />
 
       {(busy) && <div className="absolute inset-0 flex items-center justify-center bg-black/10"><Loading /></div>}
     </aside>

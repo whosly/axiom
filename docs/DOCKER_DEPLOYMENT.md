@@ -120,6 +120,18 @@ Runtime data is mounted at `/app/data` via volume `data-agent-data`：
 - `docker compose down -v` 会删除数据卷（谨慎）/ **will** remove the volume (caution)
 - `./scripts/docker-deploy.sh clean` 只删容器和镜像，保留数据卷 / keeps the volume
 
+### 备份与恢复 / Backup & Restore
+
+```bash
+./scripts/backup.sh create              # 创建备份到 ./backups/ / Create backup
+./scripts/backup.sh list                # 列出备份 / List backups
+./scripts/backup.sh restore <备份文件>   # 恢复（先停服务，需确认）/ Restore (stop service first)
+./scripts/backup.sh prune 5             # 仅保留最近 5 份 / Keep latest 5 backups
+```
+
+备份自动识别 Docker 数据卷或本地 `backend/data`；包含全部数据库、向量与模型。
+The script auto-detects the Docker volume or local `backend/data`; covers all databases, vectors and models.
+
 ## 7. 公网 HTTPS 部署 / Public HTTPS Deployment
 
 ```bash
