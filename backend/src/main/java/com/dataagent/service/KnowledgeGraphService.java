@@ -43,6 +43,7 @@ public class KnowledgeGraphService {
         for (KnowledgeEntry e : knowledgeRepo.listAll()) {
             buildEntryGraph(e);
         }
+        graphRepo.bumpVersion();
         Map<String, Object> stats = graphRepo.stats();
         log.info("[KnowledgeGraph] rebuilt: {}", stats);
         return stats;
@@ -118,6 +119,7 @@ public class KnowledgeGraphService {
             }
         }
         graphRepo.deleteOrphanNodes();
+        graphRepo.bumpVersion();
         log.info("[KnowledgeGraph] incremental sync done: type={} affected={}", type, ids.size());
     }
 

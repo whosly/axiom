@@ -66,6 +66,9 @@ export EMBEDDING_API_KEY=你的嵌入密钥  # 可选，仅 embedding.provider=a
 
 不配置密钥也能运行，使用规则引擎降级模式；运行时可在前端「配置」面板热切换厂商/模型，无需重启。
 
+> **想新增一个 LLM 厂商（如 Kimi/智谱/OpenAI）或换模型？** 见
+> [LLM 厂商与模型扩展指南](docs/LLM_PROVIDER_GUIDE.md)：换模型零代码，新增 OpenAI 兼容厂商仅需约 5 行代码。
+
 #### 2. 构建
 
 ```bash
@@ -131,6 +134,7 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 
 ## 配置切换
 
+- **LLM 厂商/模型**：DeepSeek、通义千问，新增厂商或换模型见 [docs/LLM_PROVIDER_GUIDE.md](docs/LLM_PROVIDER_GUIDE.md)
 - **Embedding**：默认本地 ONNX（零外部依赖），详见 [docs/LOCAL_DEPLOYMENT.md](docs/LOCAL_DEPLOYMENT.md)
 - **元数据库改为 SQLite**：设置环境变量 `METADATA_TYPE=sqlite`（默认 h2）
 - **关闭向量库**：设置 `ZVEC_ENABLED=false`
@@ -138,8 +142,10 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 
 ## 文档
 
+- [LLM 厂商与模型扩展指南](docs/LLM_PROVIDER_GUIDE.md)：**新增厂商/换模型的配置与实现步骤**（DeepSeek/通义示例）
 - [知识库设计](docs/KNOWLEDGE_BASE.md)：存储、检索、双写一致性、Rerank、知识图谱
 - [知识图谱实现细节与改进方案](docs/KNOWLEDGE_GRAPH.md)：数据模型、构建流程、BFS 查询、已知限制与 GraphRAG 演进方案
+- [图谱推理性能设计](docs/GRAPH_REASONING_PERFORMANCE.md)：版本快照、紧凑图、大图采样与结果缓存（生产级实现）
 - [项目问答](docs/PROJECT_QA.md)：13 个关键设计问题（架构存储、知识库检索、知识图谱、降级实践、前端可视化）
 - [Docker 一键部署](docs/DOCKER_DEPLOYMENT.md)：编译/打包/启动/公网 HTTPS/镜像推送
 - [本地部署](docs/LOCAL_DEPLOYMENT.md)：bge-small-zh-v1.5 ONNX 模型下载与配置

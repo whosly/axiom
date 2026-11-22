@@ -1,6 +1,8 @@
 package com.dataagent.service;
 
-import com.dataagent.repository.KnowledgeGraphRepository;
+import com.dataagent.graph.GraphSnapshot;
+import com.dataagent.graph.GraphSnapshotCache;
+import com.dataagent.graph.GraphSnapshotCache.SnapshotView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,32 +17,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 /**
- * 知识图谱推理测试 / Tests for knowledge-graph reasoning algorithms.
+ * 知识图谱推理测试 / Tests for knowledge-graph reasoning on compact snapshots.
  *
- * <p>用固定的小型图验证社区发现、最短路径与关联分析的正确性。
- * Verifies community detection, shortest path and related analysis on a fixed small graph.
+ * <p>用固定小图验证社区发现、最短路径与关联分析在新 int 索引结构上的正确性。
+ * Verifies algorithms on the new int-indexed snapshot with a fixed small graph.
  */
 @ExtendWith(MockitoExtension.class)
 class KnowledgeGraphReasonerTest {
 
-    @Mock private KnowledgeGraphRepository graphRepo;
+    @Mock private GraphSnapshotCache cache;
     private KnowledgeGraphReasoner reasoner;
 
-    /** 构造图：k1/k2 通过 field:sales 相连 / Graph: k1/k2 linked via field:sales. */
+    /** 构造图：k1/k2 通过 field:sales 相连，k3 孤立 / Graph: k1/k2 via field:sales, k3 isolated. */
     @BeforeEach
     void setUp() {
-        reasoner = new KnowledgeGraphReasoner(graphRepo);
-        when(graphRepo.listNodes()).thenReturn(List.of(
-                Map.of("id", "knowledge:k1", "type", "knowledge", "label", "GMV"),
-                Map.of("id", "knowledge:k2", "type", "knowledge", "label", "客单价"),
-                Map.of("id", "knowledge:k3", "type", "knowledge", "label", "孤立知识"),
-                Map.of("id", "field:sales", "type", "field", "label", "销售额")));
-        when(graphRepo.listEdges()).thenReturn(List.of(
-                Map.of("source", "knowledge:k1", "target", "field:sales", "relation", "references"),
-                Map.of("source", "knowledge:k2", "target", "field:sales", "relation", "references")));
+        GraphSnapshot.Builder b = new GraphSnapshot.Builder();
+        b.addNode("knowledge:k1", "knowledge", "GMV");
+        b.addNode("knowledge:k2", "knowledge", "客单价");
+        b.addNode("knowledge:k3", "knowledge", "孤立知识");
+        b.addNode("field:sales", "field", "销售额");
+        b.addEdge("knowledge:k1", "field:sales");
+        b.addEdge("knowledge:k2", "field:sales");
+        GraphSnapshot snapshot = b.build();
+        when(cache.get()).thenReturn(new SnapshotView(snapshot, 1L, false, 4));
+        reasoner = new KnowledgeGraphReasoner(cache);
     }
 
-    /** 社区发现：相连节点聚为一类 / Community detection groups connected nodes. */
+    /** 社区发现：相连节点聚为一类，含采样元数据 / Connected nodes grouped; sampling metadata present. */
     @Test
     @DisplayName("社区发现")
     void communities() {
@@ -48,7 +51,10 @@ class KnowledgeGraphReasonerTest {
         var result = (List<Map<String, Object>>) reasoner.communities(5).get("communities");
         assertThat(result).isNotEmpty();
         assertThat(result).anySatisfy(c -> assertThat((int) c.get("size")).isGreaterThanOrEqualTo(2));
-        assertThat(reasoner.communities(5)).containsKey("count");
+        Map<String, Object> whole = reasoner.communities(5);
+        assertThat(whole).containsEntry("sampled", false);
+        assertThat(whole).containsEntry("totalNodes", 4);
+        assertThat(whole).containsEntry("version", 1L);
     }
 
     /** 最短路径：k1 与 k2 经 field:sales 两跳可达 / Shortest path via shared field. */

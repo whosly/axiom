@@ -52,7 +52,35 @@ public class KnowledgeGraphRepository {
         """);
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_kg_edge_source ON kg_edges(source)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_kg_edge_target ON kg_edges(target)");
+        // 图版本号：每次结构变更递增，供推理层缓存失效 / Graph version for cache invalidation.
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS kg_meta (
+                meta_key VARCHAR(32) PRIMARY KEY,
+                meta_value VARCHAR(64) NOT NULL
+            )
+            """);
+        // H2/SQLite 通用：不存在才插入 / Portable across H2 and SQLite.
+        jdbc.update("INSERT INTO kg_meta (meta_key, meta_value) SELECT 'version', '0' WHERE NOT EXISTS (SELECT 1 FROM kg_meta WHERE meta_key = 'version')");
         log.info("[KnowledgeGraph] schema ready");
+    }
+
+    /**
+     * 当前图版本号（结构变更时递增）/ Current graph version (bumped on structural changes).
+     *
+     * @return 版本号 / Version number.
+     */
+    public long version() {
+        String v = jdbc.queryForObject("SELECT meta_value FROM kg_meta WHERE meta_key = 'version'", String.class);
+        try { return v == null ? 0 : Long.parseLong(v); }
+        catch (NumberFormatException e) { return 0; }
+    }
+
+    /**
+     * 递增图版本号：由 Service 在一次逻辑写操作完成后调用一次，避免逐条写重复递增。
+     * Bump version once per logical write operation, called by the service after a batch of writes.
+     */
+    public void bumpVersion() {
+        jdbc.update("UPDATE kg_meta SET meta_value = ? WHERE meta_key = 'version'", String.valueOf(version() + 1));
     }
 
     /** 清空图（重建前）/ Clear graph (before rebuild). */

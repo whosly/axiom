@@ -5,10 +5,12 @@ import lombok.Data;
 /**
  * LLM 厂商通用配置 / Common configuration shared by all LLM vendors.
  *
- * <p>所有走 OpenAI 兼容协议的厂商（DeepSeek、通义千问等）共用这一组字段，
- * 新增厂商只需在 application.yml 增加一个同名配置块，无需新增 Java 类。
- * All OpenAI-compatible vendors (DeepSeek, Qwen, etc.) share these fields;
- * adding a vendor only requires a config block in application.yml, no new Java class.
+ * <p>所有走 OpenAI 兼容协议的厂商（DeepSeek、通义千问等）共用这一组字段。
+ * 注意：新增厂商仍需一个标注 {@code @Component("名字")} 的 Provider 类供工厂发现，
+ * 配置块只提供参数（详见 docs/LLM_PROVIDER_GUIDE.md）；仅切换同一厂商的模型则只改配置。
+ * All OpenAI-compatible vendors share these fields. Adding a vendor still needs a
+ * {@code @Component("name")} Provider bean; the config block only supplies parameters
+ * (see docs/LLM_PROVIDER_GUIDE.md). Switching models within a vendor only needs config.
  */
 @Data
 public class LlmProviderConfig {

@@ -15,6 +15,8 @@ export function GraphReasoningView() {
   const [loading, setLoading] = useState(false);
   const [communities, setCommunities] = useState<Community[]>([]);
   const [iterations, setIterations] = useState(0);
+  // 大图采样提示 / Large-graph sampling metadata
+  const [sampling, setSampling] = useState<{ sampled: boolean; total: number; analyzed: number } | null>(null);
   const [nodeOptions, setNodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -42,6 +44,7 @@ export function GraphReasoningView() {
       const r = await api.graphCommunities(20);
       setCommunities(r.communities || []);
       setIterations(r.iterations || 0);
+      setSampling({ sampled: !!r.sampled, total: r.totalNodes || 0, analyzed: r.analyzedNodes || 0 });
     } catch (e) { alert('社区发现失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   }, []);
@@ -90,6 +93,11 @@ export function GraphReasoningView() {
               <div className="flex items-center justify-between">
                 <p className="text-xs" style={{ color: 'var(--td-text-color-secondary)' }}>
                   标签传播算法 / Label propagation，共 {communities.length} 个社区，{iterations} 轮迭代
+                  {sampling?.sampled && (
+                    <span style={{ color: 'var(--td-warning-color)' }}>
+                      {' '}· 大图采样 / Sampled: {sampling.analyzed}/{sampling.total} 节点
+                    </span>
+                  )}
                 </p>
                 <Button size="small" variant="outline" onClick={loadCommunities}>重新计算</Button>
               </div>

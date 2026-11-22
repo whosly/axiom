@@ -19,14 +19,14 @@
 | 知识图谱 | 实体关系抽取、增量自动同步、BFS 邻居查询、社区发现、最短路径、关联分析（前端已接入）、ECharts 可视化 |
 | 前端 | 数据集管理、SSE 对话、ECharts 图表、知识库五视图（条目/图谱/推理/Zvec/来源）、文档上传、向量状态与重建、模型选择、会话重命名 |
 | 部署 | 单 jar 常驻、Docker 一键部署、公网 HTTPS（Nginx overlay）、备份恢复脚本 |
-| 测试 | 后端 10 个单元测试（分析引擎 SQL、知识库双写、SSE 校验）+ 前端 7 个 SSE 解析测试 |
+| 测试 | 后端 64 个单元测试（行覆盖 31.9%）+ 前端 13 个测试（`sse.ts` 100% 覆盖）|
 | 文档 | README / 知识库 / 知识图谱 / 本地与 Docker 部署 / 项目问答 / DDD 模型 / 路线图 |
 
 ### 已完成批次 / Completed batches
 
 | # | 事项 | 类型 | 实现 |
 |---|---|---|---|
-| 1 | 图谱自动同步（增量） | Bug 修复 | `KnowledgeChangedEvent` + 按 entryId 增量 upsert，BATCH/REINDEX 全量兜底 |
+| 1 | 图谱自动同步（全增量） | Bug 修复 | `KnowledgeChangedEvent` 携带 ID 列表，ADD/BATCH/DELETE_BATCH 全增量，REINDEX 不触发图谱重建 |
 | 2 | SQLite 邻居查询大小写兼容 | Bug 修复 | `mapValue()` 大小写不敏感读取 H2/SQLite 列名 |
 | 3 | 文档解析适配器 | P1 | PDFBox + POI，PDF/DOCX/MD/TXT 语义分块入库 |
 | 4 | JDBC 数据源直连 | P1 | MySQL/PostgreSQL 只读导入，密码 AES 加密，前端管理面板 |
@@ -53,7 +53,7 @@
 
 ## 三、变更记录 / Changelog
 
-- 2026-11-22：新增通义千问 Provider，重构 LLM 策略模式与配置结构，图谱同步全量去重建
+- 2026-11-22：新增通义千问 Provider，重构 LLM 策略模式与配置结构，图谱同步全量去重建；测试 24→64、前端 7→13，后端行覆盖 15.1%→31.9%
 - 2026-11-21：完成图谱增量同步、全部前端入口接入、运行时 LLM 配置、备份脚本、前后端测试
 - 2026-11-20：整合重复 P3 段落，修正已完成项状态，补充 Docker 部署与测试进展
 - 2026-11-19：图谱自动同步、SQLite 兼容、文档入库、知识健壮性批次交付

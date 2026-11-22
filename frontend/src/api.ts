@@ -70,7 +70,8 @@ export const api = {
   // 图谱推理 / Graph reasoning
   graphCommunities: (maxIterations = 20) =>
     json<{ communities: Array<{ size: number; members: Array<{ id: string; label: string }>;
-      typeDistribution: Record<string, number> }>; count: number; iterations: number }>(
+      typeDistribution: Record<string, number> }>; count: number; iterations: number;
+      sampled?: boolean; totalNodes?: number; analyzedNodes?: number; version?: number }>(
       `/knowledge/graph/reason/communities?maxIterations=${maxIterations}`),
   graphPath: (from: string, to: string) =>
     json<{ path: Array<{ id: string; label: string; type: string }>; length: number; reachable: boolean;

@@ -75,6 +75,13 @@ app:
       max-length: 512
       threads: ${EMBEDDING_THREADS:2}
 
+  # 图谱推理缓存 / Graph reasoning cache
+  graph:
+    # 节点数上限，超过按度数采样 / Node cap; larger graphs are top-degree sampled.
+    max-nodes: ${GRAPH_MAX_NODES:10000}
+    # 采样保留节点数 / Nodes kept when sampling.
+    sample-size: ${GRAPH_SAMPLE_SIZE:3000}
+
   # 重排序配置 / Rerank configuration
   rerank:
     # auto | llm | rule ; auto 时按是否有 API Key 自动选择
