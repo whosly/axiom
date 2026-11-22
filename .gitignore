@@ -37,8 +37,13 @@ backend/data/
 *.pem
 
 # === IDE 与系统文件 / IDE & OS files ===
-.idea/
 .vscode/
+.codebuddy/
+.trae/
+.claude/
+.grok/
+.mvn/
+.idea/
 *.iml
 .DS_Store
 Thumbs.db
