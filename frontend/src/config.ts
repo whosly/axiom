@@ -1,10 +1,10 @@
 /**
- * 应用全局配置
+ * Axiom 应用全局配置 / Global application configuration.
  */
 export const APP_CONFIG = {
-  name: '数据分析 Agent',
-  nameInitial: 'D',
-  description: '上传数据，用自然语言提问，自动分析并生成图表',
+  name: 'Axiom',
+  nameInitial: 'A',
+  description: '自然语言提问，确定性引擎给出事实',
   version: '1.0.0',
 };
 

@@ -1,4 +1,4 @@
-# 数据分析 Agent - 多阶段构建 / Multi-stage build
+# Axiom - 多阶段构建 / Multi-stage build
 # Stage 1: Node 构建前端 / Build frontend
 # Stage 2: Maven 构建后端 / Build backend
 # Stage 3: 运行时镜像 / Runtime image
@@ -55,7 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && rm -rf /var/lib/apt/lists/*
 
 # 复制可执行 jar / Copy executable jar
-COPY --from=backend-builder /build/backend/target/data-analysis-agent-1.0.0.jar /app/app.jar
+COPY --from=backend-builder /build/backend/target/axiom-1.0.0.jar /app/app.jar
 
 # 创建数据目录结构 / Create data directories
 RUN mkdir -p /app/data/h2 /app/data/duckdb /app/data/sqlite /app/data/zvec /app/data/models/bge-small-zh-v1.5
@@ -74,8 +74,8 @@ RUN curl -fsSL --retry 3 --retry-delay 3 -o /app/data/models/bge-small-zh-v1.5/v
 STOPSIGNAL SIGTERM
 
 # OCI 镜像元数据 / OCI image metadata
-LABEL org.opencontainers.image.title="data-analysis-agent" \
-      org.opencontainers.image.description="AI data analysis agent with embedded DuckDB/H2/Zvec" \
+LABEL org.opencontainers.image.title="Axiom" \
+      org.opencontainers.image.description="Axiom deterministic analytics engine with embedded DuckDB/H2/Zvec" \
       org.opencontainers.image.version="1.0.0"
 
 # 环境变量：容器内路径 / Container paths

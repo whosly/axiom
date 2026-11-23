@@ -1,6 +1,6 @@
 # 本地部署指南 / Local Deployment Guide
 
-> 目标：完全本地运行数据分析 Agent，**Embedding 不依赖任何外部服务**。
+> 目标：完全本地运行 Axiom，**Embedding 不依赖任何外部服务**。
 > Goal: run the app fully locally, with **zero external dependency for embeddings**.
 
 ## 1. 架构变化 / Architecture Change
@@ -115,7 +115,7 @@ mvn clean package -DskipTests
 # 4) 启动（常驻，从项目根目录执行）
 cd ..
 ./scripts/local-deploy.sh start
-# 或前台：cd backend && java -jar target/data-analysis-agent-1.0.0.jar
+# 或前台：cd backend && java -jar target/axiom-1.0.0.jar
 ```
 
 访问 `http://localhost:8080`。

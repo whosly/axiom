@@ -9,7 +9,7 @@
 
 ## 1. 设计目标 / Design Goals
 
-让数据分析 Agent 从「只理解数据结构」升级为「理解业务语义」：
+让 Axiom 从「只理解数据结构」升级为「理解业务语义」：
 Upgrade the agent from "understanding data structure" to "understanding business semantics":
 
 - **指标口径**：GMV 怎么算？对应哪些字段？/ How is GMV calculated? Which fields?

@@ -77,7 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_edge_target ON kg_edges(target);
 
 `KnowledgeGraphService.rebuild()` performs a **full clear-and-rebuild**: `clear()` → `listAll()` → per-entry extraction.
 
-```39:78:backend/src/main/java/com/dataagent/service/KnowledgeGraphService.java
+```39:78:backend/src/main/java/com/axiom/service/KnowledgeGraphService.java
 public Map<String, Object> rebuild() {
     graphRepo.clear();
     List<KnowledgeEntry> entries = knowledgeRepo.listAll();
@@ -110,7 +110,7 @@ public Map<String, Object> rebuild() {
 `KnowledgeGraphRepository.neighbors()`（L94-113）：`LinkedHashSet` 去重，每跳同时查出边与入边，`frontier` 为空提前终止。
 `LinkedHashSet` for dedup; each hop queries both outgoing and incoming edges; early exit when frontier is empty.
 
-```94:113:backend/src/main/java/com/dataagent/repository/KnowledgeGraphRepository.java
+```94:113:backend/src/main/java/com/axiom/repository/KnowledgeGraphRepository.java
 public Set<String> neighbors(String startId, int hops) {
     Set<String> visited = new LinkedHashSet<>();
     visited.add(startId);

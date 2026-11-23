@@ -4,7 +4,7 @@ server:
 
 spring:
   application:
-    name: data-analysis-agent
+    name: axiom
   servlet:
     multipart:
       max-file-size: 50MB
@@ -94,5 +94,5 @@ app:
 
 logging:
   level:
-    com.dataagent: INFO
+    com.axiom: INFO
     org.springframework.web: WARN

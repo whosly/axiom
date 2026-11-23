@@ -23,17 +23,17 @@ private String chartType;
 ## 2. 领域模型结构 / Domain Model
 
 ```
-com.dataagent.domain/          领域层（无框架依赖）
+com.axiom.domain/          领域层（无框架依赖）
 ├── AnalysisIntent    枚举  分析意图：QUERY/TREND/ANOMALY/COMPARE/SUMMARY
 ├── Aggregation       枚举  聚合方式：SUM/AVG/COUNT/MIN/MAX（含 getSql()）
 ├── TimeGranularity   枚举  时间粒度：HOUR/DAY/WEEK/MONTH/QUARTER/YEAR（含 periodSql()）
 ├── ChartType         枚举  图表类型：LINE/BAR/PIE/SCATTER/TABLE
 └── SortOrder         枚举  排序方向：ASC/DESC（含 getSql()）
 
-com.dataagent.model/
+com.axiom.model/
 └── AnalysisPlan      聚合根/值对象  用上述枚举作为字段类型 + 便利方法
 
-com.dataagent.service/
+com.axiom.service/
 └── AnalysisEngine    领域服务  switch(intent) 穷举，调用枚举方法生成 SQL
 ```
 

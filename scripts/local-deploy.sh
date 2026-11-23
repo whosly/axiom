@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 数据分析 Agent - 本地 jar 常驻部署脚本（无需 Docker）
-# Data Analysis Agent - local jar daemon deployment script (no Docker required)
+# Axiom - 本地 jar 常驻部署脚本（无需 Docker）
+# Axiom - local jar daemon deployment script (no Docker required)
 #
 # 与 scripts/docker-deploy.sh 的分工：本脚本直接在宿主机用 nohup java -jar 运行，
 # 需要本地 JDK 17 与 Maven；Docker 方案见 scripts/docker-deploy.sh。
@@ -22,8 +22,8 @@ set -e
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR/backend"
 
-APP_NAME="data-analysis-agent"
-JAR_PATH="target/data-analysis-agent-1.0.0.jar"
+APP_NAME="axiom"
+JAR_PATH="target/axiom-1.0.0.jar"
 PID_FILE="app.pid"
 LOG_FILE="app.log"
 PROFILE="${SPRING_PROFILES_ACTIVE:-prod}"

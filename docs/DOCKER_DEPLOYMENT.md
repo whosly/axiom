@@ -19,7 +19,7 @@ No local JDK/Maven/Node needed — everything happens inside the build.
 ## 2. 一键启动 / Quick Start
 
 ```bash
-cd data-analysis-agent
+cd axiom
 
 # 一键部署：构建 + 启动 + 等待健康检查通过
 ./scripts/docker-deploy.sh deploy
@@ -104,8 +104,8 @@ docker compose build --build-arg JRE_IMAGE=eclipse-temurin:17-jre-alpine
 
 ## 6. 数据持久化 / Data Persistence
 
-运行时数据通过 Docker volume `data-agent-data` 挂载到 `/app/data`：
-Runtime data is mounted at `/app/data` via volume `data-agent-data`：
+运行时数据通过 Docker volume `axiom-data` 挂载到 `/app/data`：
+Runtime data is mounted at `/app/data` via volume `axiom-data`：
 
 ```
 /app/data/
@@ -176,9 +176,9 @@ REGISTRY=registry.example.com/team ./scripts/docker-deploy.sh push
 After pushing, on the target server:
 
 ```bash
-docker pull registry.example.com/team/data-analysis-agent:latest
+docker pull registry.example.com/team/axiom:latest
 docker run -d -p 8080:8080 -v agent-data:/app/data --restart unless-stopped \
-  registry.example.com/team/data-analysis-agent:latest
+  registry.example.com/team/axiom:latest
 ```
 
 ## 9. 健康检查 / Health Check
@@ -213,7 +213,7 @@ The app has no authentication (single-user design). Before public exposure:
 | 容器因 Zvec 崩溃（SIGSEGV）| 旧版本向量数据格式不兼容；执行 `./scripts/docker-deploy.sh reset-vectors && ./scripts/docker-deploy.sh restart`，业务数据保留，向量重建 |
 | 健康检查失败 | 端口被占用改 `APP_PORT`；首次加载慢等待 90s；prod 模式用 `curl -k` |
 | SSE 无实时输出 | 确认走的是 Nginx `/api/chat` location（已关闭 buffering）|
-| 数据丢失 | 确认没用 `down -v`；`docker volume inspect data-agent-data` |
+| 数据丢失 | 确认没用 `down -v`；`docker volume inspect axiom-data` |
 | 想重新构建 | `./scripts/docker-deploy.sh clean && ./scripts/docker-deploy.sh deploy` |
 
 离线部署 / Offline deployment：构建期需要网络下载 Node 依赖、Maven 依赖与模型，运行期完全离线。

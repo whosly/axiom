@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 数据分析 Agent - Docker 一键部署脚本
-# Data Analysis Agent - Docker one-click deployment script
+# Axiom - Docker 一键部署脚本
+# Axiom - Docker one-click deployment script
 #
 # 一条命令完成：前端编译 → 后端打包 → 镜像构建 → 容器启动 → 健康检查
 # One command does: frontend build → backend package → image build → container start → health check
@@ -42,8 +42,8 @@ if [ -f .env ]; then
 fi
 
 COMPOSE="docker compose"
-IMAGE="${IMAGE:-data-analysis-agent:latest}"
-CONTAINER="data-analysis-agent"
+IMAGE="${IMAGE:-axiom:latest}"
+CONTAINER="axiom"
 APP_PORT="${APP_PORT:-8080}"
 DOMAIN="${DOMAIN:-localhost}"
 HTTPS_PORT="${HTTPS_PORT:-443}"
@@ -201,7 +201,7 @@ do_prod() {
 # Incompatible legacy Zvec data can cause a native SIGSEGV; recreate collections after cleanup.
 do_reset_vectors() {
   check_docker
-  local vol="data-agent-data"
+  local vol="axiom-data"
   warn "将删除数据卷 $vol 中的 Zvec 向量数据（业务数据保留）/ Removing Zvec vectors from volume $vol (business data kept)"
   # 优先用已构建的应用镜像执行清理，避免额外拉取 alpine（离线环境拉取会失败）
   # Prefer the already-built app image to avoid pulling alpine (which fails offline).
@@ -222,7 +222,7 @@ do_push() {
     exit 1
   fi
   do_build
-  local remote="${REGISTRY}/data-analysis-agent:latest"
+  local remote="${REGISTRY}/axiom:latest"
   info "打标签并推送 / Tagging and pushing: $remote"
   docker tag "$IMAGE" "$remote"
   docker push "$remote"

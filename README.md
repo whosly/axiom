@@ -1,48 +1,72 @@
-# 数据分析 Agent
+# Axiom
 
-一个全栈 AI 数据分析应用：上传数据，用自然语言提问，自动完成**数据查询、趋势分析、异常识别、指标对比**，并生成**分析结论与可视化图表**。
+> **确定性分析内核 / The Deterministic Analytics Engine**
+>
+> 自然语言是入口，不是裁判。/ Natural language is the interface, not the arbiter.
+> 模型理解意图，引擎给出事实。/ Models interpret intent; engines deliver facts.
 
-## 技术栈
+Axiom 是一个全栈 AI 数据分析系统：上传数据，用自然语言提问，自动完成**数据查询、趋势分析、异常识别、指标对比**，并生成**分析结论与可视化图表**。
+
+`Java 17 · Spring Boot 3.3 · React 18 · DuckDB · Zvec · LLM-agnostic`
+
+---
+
+## 设计公理 / Design Axioms
+
+| # | 公理 | 含义 |
+|---|---|---|
+| 1 | **数字不由模型生成** | LLM 只负责「自然语言 → 分析计划」与「结果 → 结论」的语义转换；所有数值由 DuckDB SQL 确定性计算 |
+| 2 | **同一问题，同一答案** | 过程可复现、可审计，拒绝幻觉数字 |
+| 3 | **离线依然可用** | 未配置 API Key 时自动降级到内置规则引擎，核心分析能力不中断 |
+| 4 | **一切皆可插拔** | LLM、Embedding、元数据库、向量库均可配置切换 |
+
+---
+
+## 技术基座 / Foundation
 
 | 层 | 技术 |
 |---|---|
 | 前端 | React 18 + TypeScript + Vite + TDesign React + ECharts |
 | 后端 | Java 17 + Spring Boot 3.3 |
-| 分析库 | DuckDB（嵌入式 OLAP，列式聚合） |
+| 分析内核 | DuckDB（嵌入式 OLAP，列式聚合） |
 | 元数据库 | H2（默认）/ SQLite（配置可切换） |
 | 向量库 | Zvec（嵌入式，双 collection：数据集语义 / 知识库） |
-| 大模型 | DeepSeek / 通义千问（OpenAI 兼容策略模式，可插拔）+ 本地/API embedding |
-| 知识库 | 统一 KnowledgeEntry + 混合检索（向量 + FTS + RRF），详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
+| 大模型 | DeepSeek / 通义千问（OpenAI 兼容策略模式，可插拔）+ 本地 / API embedding |
+| 知识底座 | 统一 KnowledgeEntry + 混合检索（向量 + FTS + RRF），详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
 | 部署 | 单个可执行 jar（前端静态资源内嵌），常驻服务 |
 
-## 架构
+---
+
+## 架构 / Architecture
 
 ```
-用户提问
-   │
-   ▼
-[前端 React] ──HTTP/SSE──> [Spring Boot]
+用户提问 / Question
+       │
+       ▼
+[React 前端] ──HTTP/SSE──> [Spring Boot]
                               │
               ┌───────────────┼────────────────┐
               ▼               ▼                ▼
-        LlmProvider      AnalysisEngine    VectorService
-     (DeepSeek/通义策略) (DuckDB SQL)      (Zvec)
+        LlmProvider      AnalysisEngine     VectorService
+     (DeepSeek/通义策略)  (DuckDB SQL)        (Zvec)
               │               │                │
-              └──── 分析计划 JSON ────┘                │
-                          │                            │
-                   结论生成 ◄──────── 语义检索 ────────┘
+              └── 分析计划 JSON ──┘                │
+                          │                      │
+                   结论生成 ◄────── 语义检索 ─────┘
                           │
-                    H2/SQLite 元数据（会话/消息/数据集）
+                 H2/SQLite 元数据
 ```
 
-**设计要点**：大模型只负责「自然语言 → 结构化分析计划」和「结果 → 结论」的语义转换；所有数值计算由确定性引擎（DuckDB SQL）执行，保证结果可复现、不编造数字。当未配置 API Key 时，自动降级到内置规则引擎，核心分析功能依然可用。
+**核心机制**：大模型只负责语义转换，数值计算由确定性引擎执行——这是「不编造数字」这一承诺得以成立的前提。
 
-## 快速开始
+---
+
+## 快速开始 / Quick Start
 
 ### Docker 一键部署（推荐，含公网 HTTPS）
 
 ```bash
-cd data-analysis-agent
+cd axiom
 cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 或 QWEN_API_KEY 等配置
 
 ./scripts/docker-deploy.sh deploy   # 前端编译 + 后端打包 + 镜像构建 + 启动 + 健康检查
@@ -94,14 +118,14 @@ cd backend && mvn clean package -DskipTests
 
 # 方式二：前台运行
 cd backend
-java -jar target/data-analysis-agent-1.0.0.jar
+java -jar target/axiom-1.0.0.jar
 ```
 
 访问 **http://localhost:8080**
 
-![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example.png)
+![Axiom 界面预览 / Axiom UI preview](docs/example.png)
 
-![数据分析 Agent 界面预览 / Data Analysis Agent UI preview](docs/example2.png)
+![Axiom 界面预览 / Axiom UI preview](docs/example2.png)
 
 ### 运行测试与覆盖率 / Tests & Coverage
 
@@ -112,9 +136,11 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 ```
 
 当前覆盖率：后端行覆盖 **31.9%**（分支 27.5%）、前端 `sse.ts` **100%**。
-后端未覆盖部分主要是依赖真实数据库/ONNX 模型/Zvec native 的集成型代码。
+后端未覆盖部分主要是依赖真实数据库 / ONNX 模型 / Zvec native 的集成型代码。
 
-## API 概览
+---
+
+## API 概览 / API Reference
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -132,7 +158,9 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 | POST | `/api/knowledge/search` | 知识混合检索测试 |
 | DELETE | `/api/knowledge/{id}` | 删除知识条目 |
 
-## 配置切换
+---
+
+## 配置切换 / Configuration
 
 - **LLM 厂商/模型**：DeepSeek、通义千问，新增厂商或换模型见 [docs/LLM_PROVIDER_GUIDE.md](docs/LLM_PROVIDER_GUIDE.md)
 - **Embedding**：默认本地 ONNX（零外部依赖），详见 [docs/LOCAL_DEPLOYMENT.md](docs/LOCAL_DEPLOYMENT.md)
@@ -140,7 +168,9 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 - **关闭向量库**：设置 `ZVEC_ENABLED=false`
 - **数据目录**：设置 `DATA_DIR`（默认 `./data`，相对后端工作目录）
 
-## 文档
+---
+
+## 文档 / Documentation
 
 - [LLM 厂商与模型扩展指南](docs/LLM_PROVIDER_GUIDE.md)：**新增厂商/换模型的配置与实现步骤**（DeepSeek/通义示例）
 - [知识库设计](docs/KNOWLEDGE_BASE.md)：存储、检索、双写一致性、Rerank、知识图谱
@@ -152,10 +182,12 @@ cd frontend && npm run test:coverage  # 前端覆盖率（Node 内建）
 - [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md)：枚举值对象与 period 缺陷修复
 - [产品路线图](docs/ROADMAP.md)：已完成功能、Backlog 与方向决策
 
-## 项目结构
+---
+
+## 项目结构 / Repository Layout
 
 ```
-data-analysis-agent/
+axiom/
 ├── Dockerfile                # 多阶段构建（前端 + 后端 + 模型）
 ├── docker-compose.yml        # 基础服务编排
 ├── docker-compose.prod.yml   # 公网 HTTPS overlay
@@ -181,7 +213,7 @@ data-analysis-agent/
 │       ├── __tests__/            # 前端单元测试
 │       └── types.ts
 └── backend/           # Spring Boot 后端
-    └── src/main/java/com/dataagent/
+    └── src/main/java/com/axiom/
         ├── config/            # 数据源、Zvec、Web 配置
         ├── controller/        # REST + SSE API
         ├── service/           # 分析引擎、编排、向量、规则降级

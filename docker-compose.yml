@@ -1,8 +1,8 @@
-# 数据分析 Agent Docker Compose 配置
+# Axiom Docker Compose 配置
 # 一键启动：docker compose up -d --build
 
 services:
-  data-agent:
+  axiom:
     build:
       context: .
       dockerfile: Dockerfile
@@ -11,8 +11,8 @@ services:
         MODEL_MIRROR: ${MODEL_MIRROR:-https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main}
         # Maven 依赖镜像（可选，弱网加速）/ Optional Maven mirror for slow networks
         MAVEN_MIRROR: ${MAVEN_MIRROR:-}
-    image: data-analysis-agent:latest
-    container_name: data-analysis-agent
+    image: axiom:latest
+    container_name: axiom
     ports:
       - "${APP_PORT:-8080}:8080"
     volumes:
@@ -57,4 +57,4 @@ services:
 
 volumes:
   agent-data:
-    name: data-agent-data
+    name: axiom-data

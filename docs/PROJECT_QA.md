@@ -1,6 +1,6 @@
 # 项目问答 / Project Q&A
 
-> 基于「数据分析 Agent」项目 / Based on the Data Analysis Agent project
+> 基于 Axiom 项目 / Based on the Axiom project
 >
 > 以问答形式记录关键设计决策、技术取舍、已知限制与改进方向，供开发维护与快速理解使用。
 > Key design decisions, trade-offs, known limitations and improvement directions are documented in Q&A form for maintenance and onboarding.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 数据分析 Agent - 数据备份与恢复脚本
-# Data Analysis Agent - data backup and restore script
+# Axiom - 数据备份与恢复脚本
+# Axiom - data backup and restore script
 #
 # 用法 / Usage:
 #   ./scripts/backup.sh create [输出目录]       # 创建备份（默认 ./backups）
@@ -17,7 +17,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
-VOLUME_NAME="data-agent-data"
+VOLUME_NAME="axiom-data"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'

@@ -84,12 +84,12 @@ Example: adding Kimi, whose API is OpenAI-compatible.
 
 ### 步骤 1：新增 Provider 类（约 5 行）/ Add a Provider class
 
-创建 `backend/src/main/java/com/dataagent/llm/KimiProvider.java`：
+创建 `backend/src/main/java/com/axiom/llm/KimiProvider.java`：
 
 ```java
-package com.dataagent.llm;
+package com.axiom.llm;
 
-import com.dataagent.config.AppProperties;
+import com.axiom.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
@@ -208,7 +208,7 @@ POST 请求体字段（均为可选）：
 ## 6. 策略模式结构与扩展点 / Strategy structure & extension points
 
 ```
-com.dataagent.llm/
+com.axiom.llm/
 ├── LlmProvider.java              接口：chat 职责 + isAvailable/chatModel/displayName
 ├── LlmProviderConfig.java        所有厂商共享的配置结构
 ├── OpenAiCompatibleProvider.java OpenAI 兼容基类（请求构建 + SSE 解析）
@@ -244,4 +244,4 @@ A：embedding 与对话完全解耦，走 `app.embedding.provider`（`local` 或
 A：不会。热更新只改内存中的配置 bean，重启后回到 `application.yml` / 环境变量的值。要持久化请改配置文件。
 
 **Q：如何为新厂商写测试？**
-A：参考 `backend/src/test/java/com/dataagent/llm/LlmProviderStrategyTest.java`，构造 AppProperties + 两个真实 Provider + 工厂即可验证发现/切换/隔离。
+A：参考 `backend/src/test/java/com/axiom/llm/LlmProviderStrategyTest.java`，构造 AppProperties + 两个真实 Provider + 工厂即可验证发现/切换/隔离。
