@@ -181,8 +181,8 @@ cd backend && java -jar target/axiom-1.0.0.jar
 访问 **http://localhost:8080**
 
 <p align="center">
-  <a href="docs/example.png"><img src="docs/example.png" width="48%" alt="Axiom UI" /></a>
-  <a href="docs/example2.png"><img src="docs/example2.png" width="48%" alt="Axiom UI" /></a>
+  <a href="https://github.com/whosly/axiom/blob/main/docs/example.png"><img src="https://raw.githubusercontent.com/whosly/axiom/main/docs/example.png" width="48%" alt="Axiom 界面预览" /></a>
+  <a href="https://github.com/whosly/axiom/blob/main/docs/example2.png"><img src="https://raw.githubusercontent.com/whosly/axiom/main/docs/example2.png" width="48%" alt="Axiom 界面预览" /></a>
 </p>
 
 ### 测试与覆盖率 / Tests & Coverage
