@@ -153,7 +153,7 @@ export EMBEDDING_API_KEY=你的嵌入密钥  # 可选，仅 embedding.provider=a
 
 零密钥也能运行（规则引擎降级）；运行时可在前端「配置」面板热切换厂商与模型。
 
-> 新增 LLM 厂商或换模型？见 [部署与扩展](docs/DEPLOYMENT.md#7-llm-厂商与模型扩展)：换模型零代码，新增 OpenAI 兼容厂商约 5 行代码。
+> 新增 LLM 厂商或换模型？见 [LLM 扩展指南](docs/LLM_PROVIDER_GUIDE.md)：换模型零代码，新增 OpenAI 兼容厂商约 5 行代码。
 
 **2. 构建**
 
@@ -236,7 +236,7 @@ cd frontend && npm run test:coverage
 
 | 项 | 方式 | 默认值 |
 |---|---|---|
-| LLM 厂商 / 模型 | `LLM_PROVIDER`，详见 [部署与扩展](docs/DEPLOYMENT.md#7-llm-厂商与模型扩展) | `deepseek` |
+| LLM 厂商 / 模型 | `LLM_PROVIDER`，详见 [LLM 扩展指南](docs/LLM_PROVIDER_GUIDE.md) | `deepseek` |
 | Embedding | `EMBEDDING_PROVIDER=local\|api`，详见 [部署与扩展](docs/DEPLOYMENT.md#6-embedding-模型) | `local` |
 | 元数据库 | `METADATA_TYPE=h2\|sqlite` | `h2` |
 | 向量库 | `ZVEC_ENABLED=false` 关闭 | `true` |
@@ -250,7 +250,8 @@ cd frontend && npm run test:coverage
 | 文档 | 内容 |
 |---|---|
 | [架构设计](docs/ARCHITECTURE.md) | 领域模型、知识库、知识图谱、存储布局与设计决策 |
-| [部署与扩展](docs/DEPLOYMENT.md) | 本地 / Docker / HTTPS 部署、Embedding 模型、LLM 厂商扩展、故障排查 |
+| [部署与扩展](docs/DEPLOYMENT.md) | 本地 / Docker / HTTPS 部署、Embedding 模型、故障排查 |
+| [LLM 扩展指南](docs/LLM_PROVIDER_GUIDE.md) | 换模型零代码、新增厂商约 5 行、热配置 API |
 | [产品路线图](docs/ROADMAP.md) | 已完成功能、明确不做的事项与变更记录 |
 
 ---
