@@ -132,8 +132,8 @@
 
     <build>
         <plugins>
-            <!-- 单元测试覆盖率：mvn test 后生成 target/site/jacoco/index.html
-                 Coverage report: generated at target/site/jacoco/index.html after mvn test. -->
+            <!-- 单元测试覆盖率：报告固定输出到 reports/coverage/backend，不受 mvn clean 影响
+                 Coverage reports go to reports/coverage/backend so mvn clean does not remove them. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -150,6 +150,10 @@
                         <goals>
                             <goal>report</goal>
                         </goals>
+                        <configuration>
+                            <!-- 相对 backend 模块，落到项目根 reports 目录 / Relative to backend module -->
+                            <outputDirectory>${project.basedir}/../reports/coverage/backend</outputDirectory>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

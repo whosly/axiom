@@ -187,13 +187,29 @@ cd backend && java -jar target/axiom-1.0.0.jar
 
 ### 测试与覆盖率 / Tests & Coverage
 
+一键生成前后端报告，固定输出到 `reports/coverage/`，不会被 `mvn clean` 清掉：
+
 ```bash
-cd backend && mvn test                     # 后端 64 个测试
-cd frontend && npm test                    # 前端 13 个测试（SSE 解析）
-cd frontend && npm run test:coverage       # 前端覆盖率（Node 内建）
+./scripts/coverage.sh           # 跑全部测试并生成报告
+./scripts/coverage.sh --open    # 生成后打开汇总页
 ```
 
-覆盖率：后端行覆盖 **31.9%**（分支 27.5%）、前端 `sse.ts` **100%**。报告见 `backend/target/site/jacoco/index.html`。后端未覆盖部分主要是依赖真实数据库 / ONNX 模型 / Zvec native 的集成型代码。
+| 报告 | 路径 |
+|---|---|
+| 汇总 / Summary | `reports/coverage/SUMMARY.md` |
+| 后端 HTML / Backend | `reports/coverage/backend/index.html` |
+| 后端 XML / Backend | `reports/coverage/backend/jacoco.xml` |
+| 前端明细 / Frontend | `reports/coverage/frontend/coverage.txt` |
+
+后端 64 个测试、前端 13 个测试（SSE 解析）。后端未覆盖部分主要是依赖真实数据库 / ONNX 模型 / Zvec native 的集成型代码。
+
+单独运行：
+
+```bash
+cd backend && mvn test
+cd frontend && npm test
+cd frontend && npm run test:coverage
+```
 
 ---
 
