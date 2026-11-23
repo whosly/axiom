@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Select, Tooltip, Loading, Tag, Dialog, Input } from 'tdesign-react';
+import { Button, Select, Tooltip, Tag, Dialog, Input } from 'tdesign-react';
 import { RefreshIcon, SunnyIcon, MoonIcon, SendIcon, StopIcon, ChatIcon, DeleteIcon, BookIcon, EditIcon } from 'tdesign-icons-react';
 import '@tdesign-react/chat/es/style/index.js';
 
@@ -42,17 +42,22 @@ function App() {
   // Hold the AbortController in a ref so the stop button can cancel the in-flight SSE request.
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // 加载失败与空数据必须区分，否则接口挂掉会被误显示成「还没有数据集」。
+  // Distinguish load failure from empty data so a broken API is not shown as "no datasets".
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const selectedDataset = datasets.find(d => d.id === selectedDatasetId) || null;
 
   const loadDatasets = useCallback(async () => {
     setDatasetsLoading(true);
+    setLoadError(null);
     try {
       const list = await api.listDatasets();
       setDatasets(list);
       if (list.length && !selectedDatasetId) setSelectedDatasetId(list[0].id);
     } catch (e) {
       console.error('load datasets failed', e);
+      setLoadError('数据集加载失败 / Failed to load datasets: ' + (e as Error).message);
     } finally {
       setDatasetsLoading(false);
     }
@@ -107,12 +112,15 @@ function App() {
     const question = input.trim();
     if (!question || !selectedDatasetId || isLoading) return;
 
+    // 用 UUID 避免同一毫秒连续发送产生重复 React key；init 事件到达后再换成后端持久化 ID。
+    // UUID avoids duplicate React keys on rapid sends; swap to the server ID once init arrives.
+    let userMsgId = 'u-' + crypto.randomUUID();
     const userMsg: ChatMessage = {
-      id: 'u-' + Date.now(), role: 'user', content: question,
+      id: userMsgId, role: 'user', content: question,
       createdAt: new Date().toISOString(),
     };
     const assistantMsg: ChatMessage = {
-      id: 'a-' + Date.now(), role: 'assistant', content: '',
+      id: 'a-' + crypto.randomUUID(), role: 'assistant', content: '',
       createdAt: new Date().toISOString(), streaming: true,
     };
     setMessages(prev => [...prev, userMsg, assistantMsg]);
@@ -134,6 +142,13 @@ function App() {
         switch (event.type) {
           case 'init':
             setCurrentSessionId(event.sessionId);
+            // 用后端持久化的用户消息 ID 替换乐观 ID，避免后续刷新/删除时 ID 对不上。
+            // Replace the optimistic ID with the persisted one for later refresh/delete operations.
+            if (event.userMessageId && event.userMessageId !== userMsgId) {
+              const oldId = userMsgId;
+              userMsgId = event.userMessageId;
+              setMessages(prev => prev.map(m => m.id === oldId ? { ...m, id: userMsgId } : m));
+            }
             break;
           case 'status':
             updateAssistant(m => ({ ...m, stage: event.message }));
@@ -164,15 +179,17 @@ function App() {
       }, controller.signal);
       updateAssistant(m => ({ ...m, streaming: false }));
     } catch (e) {
-      // 主动取消属于用户操作，不展示为错误；仅将流式光标收尾
-      // An intentional abort is a user action, not an error; only stop the streaming cursor.
+      // 主动取消属于用户操作，不展示为错误；仅将流式光标收尾。
+      // 真实失败则移除乐观消息并恢复输入，让用户能直接重试。
+      // On real failure, remove optimistic messages and restore input so the user can retry.
       const aborted = controller.signal.aborted;
-      updateAssistant(m => ({
-        ...m,
-        content: aborted ? (m.content || '已停止生成') : '请求失败：' + (e as Error).message,
-        streaming: false,
-        stage: undefined,
-      }));
+      if (aborted) {
+        updateAssistant(m => ({ ...m, content: m.content || '已停止生成', streaming: false, stage: undefined }));
+      } else {
+        setMessages(prev => prev.filter(m => m.id !== userMsgId && m.id !== assistantMsg.id));
+        setInput(question);
+        alert('请求失败 / Request failed: ' + (e as Error).message);
+      }
     } finally {
       abortRef.current = null;
       setIsLoading(false);
@@ -209,6 +226,12 @@ function App() {
   return (
     <div className="flex h-screen w-screen overflow-hidden"
       style={{ backgroundColor: 'var(--td-bg-color-page)' }}>
+      {loadError && (
+        <div className="absolute top-2 left-2 z-50 px-3 py-1 rounded text-sm"
+          style={{ background: 'var(--td-error-color-1)', color: 'var(--td-error-color-6)' }}>
+          {loadError} <button onClick={loadDatasets} className="underline">重试</button>
+        </div>
+      )}
       <DatasetPanel
         datasets={datasets}
         selectedId={selectedDatasetId}
@@ -216,7 +239,6 @@ function App() {
         onSelect={id => { setSelectedDatasetId(id); startNewChat(); }}
         onCreated={handleDatasetCreated}
         onDeleted={handleDatasetDeleted}
-        onRefresh={loadDatasets}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -254,9 +276,11 @@ function App() {
                 <Tooltip content="删除当前会话">
                   <Button variant="text" size="small" icon={<DeleteIcon />}
                     onClick={async () => {
-                      await api.deleteSession(currentSessionId);
-                      setSessions(prev => prev.filter(s => s.id !== currentSessionId));
-                      startNewChat();
+                      try {
+                        await api.deleteSession(currentSessionId);
+                        setSessions(prev => prev.filter(s => s.id !== currentSessionId));
+                        startNewChat();
+                      } catch (e) { alert('删除会话失败: ' + (e as Error).message); }
                     }} />
                 </Tooltip>
               </>
@@ -364,7 +388,12 @@ function App() {
       </Dialog>
 
       <LlmConfigPanel visible={configOpen} onClose={() => setConfigOpen(false)}
-        onUpdated={() => api.models().then(m => setModels(m.models)).catch(() => {})} />
+        onUpdated={() => api.models().then(m => {
+          setModels(m.models);
+          // 配置面板改了厂商/模型后同步主界面选择，避免新会话写入过时的模型名。
+          // Sync the main selector after config changes so new sessions do not record a stale model.
+          setSelectedModel(m.defaultModel || m.models[0]?.modelId || 'deepseek');
+        }).catch(() => {})} />
     </div>
   );
 }

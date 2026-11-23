@@ -1,8 +1,8 @@
 import { lazy, Suspense, useState } from 'react';
-import { Tag, Collapse, Loading } from 'tdesign-react';
+import { Tag, Loading } from 'tdesign-react';
 import { ChevronDownIcon, ChartBarIcon, TipsIcon, CheckCircleIcon } from 'tdesign-icons-react';
 import type { ChatMessage } from '../types';
-import { INTENT_LABELS, INTENT_COLORS } from '../types';
+import { INTENT_LABELS } from '../types';
 
 // ECharts 体积较大，按需加载避免阻塞首屏 / Lazy-load the heavy ECharts bundle.
 const AnalysisChart = lazy(() => import('./AnalysisChart').then(m => ({ default: m.AnalysisChart })));

@@ -135,12 +135,22 @@ public class KnowledgeRepository {
                 this::mapRow, sourceId);
     }
 
-    /** 检查内容哈希是否存在（幂等去重）/ Check whether a content hash exists (idempotency). */
+    /** 检查内容哈希是否存在（仅未删除条目，幂等去重）/ Check whether a content hash exists among live entries. */
     public boolean existsByHash(String textHash) {
         if (textHash == null) return false;
         Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM knowledge_entries WHERE text_hash = ?", Integer.class, textHash);
+                "SELECT COUNT(*) FROM knowledge_entries WHERE text_hash = ? AND (deleted IS NULL OR deleted = FALSE)",
+                Integer.class, textHash);
         return count != null && count > 0;
+    }
+
+    /** 按哈希查找未删除条目（幂等去重返回已有条目）/ Find a live entry by content hash. */
+    public KnowledgeEntry findByHash(String textHash) {
+        if (textHash == null) return null;
+        List<KnowledgeEntry> hits = jdbc.query(
+                "SELECT * FROM knowledge_entries WHERE text_hash = ? AND (deleted IS NULL OR deleted = FALSE) LIMIT 1",
+                this::mapRow, textHash);
+        return hits.isEmpty() ? null : hits.get(0);
     }
 
     /**

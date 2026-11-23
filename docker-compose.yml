@@ -17,7 +17,7 @@ services:
       - "${APP_PORT:-8080}:8080"
     volumes:
       # 持久化数据：H2/DuckDB/Zvec/模型 / Persistent data
-      - agent-data:/app/data
+      - axiom-data:/app/data
     # 将 .env 中的配置整体注入容器（文件不存在也不报错）
     # Inject all .env entries into the container (missing file is tolerated)
     env_file:
@@ -56,5 +56,5 @@ services:
       retries: 3
 
 volumes:
-  agent-data:
+  axiom-data:
     name: axiom-data

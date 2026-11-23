@@ -9,14 +9,22 @@ import { api } from '../api';
  */
 export function ZvecInspectorView() {
   const [collections, setCollections] = useState<any[]>([]);
-  const [active, setActive] = useState('knowledge_base');
+  const [active, setActive] = useState('knowledge_base_v2');
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<any>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const loadCollections = async () => {
-    const r: any = await api.zvecCollections();
-    setCollections(r.collections || []);
+    try {
+      const r: any = await api.zvecCollections();
+      setCollections(r.collections || []);
+      setLoadError(null);
+    } catch (e) {
+      console.error(e);
+      setLoadError('集合列表加载失败 / Failed to load collections: ' + (e as Error).message);
+    }
   };
 
   const loadDocs = async (name: string) => {
@@ -24,12 +32,17 @@ export function ZvecInspectorView() {
     try {
       const r: any = await api.zvecDocs(name, 100);
       setDocs(r.docs || []);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setLoadError('文档列表加载失败 / Failed to load documents: ' + (e as Error).message);
+    }
     finally { setLoading(false); }
   };
 
   useEffect(() => {
-    loadCollections().then(() => loadDocs(active));
+    // 无论集合列表是否失败都要加载文档并解除 loading，否则界面永久转圈。
+    // Always load docs and clear loading even if collection listing fails.
+    loadCollections().finally(() => loadDocs(active));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const switchCollection = (name: string) => { setActive(name); loadDocs(name); };
@@ -66,6 +79,12 @@ export function ZvecInspectorView() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-5">
+        {loadError && (
+          <div className="mb-3 px-3 py-2 rounded text-sm"
+            style={{ background: 'var(--td-error-color-1)', color: 'var(--td-error-color-6)' }}>
+            {loadError}
+          </div>
+        )}
         {loading ? <div className="flex justify-center py-10"><Loading /></div> : (
           <div className="max-w-5xl mx-auto space-y-2">
             {docs.length === 0 && (

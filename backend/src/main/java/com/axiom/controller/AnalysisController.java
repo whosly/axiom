@@ -86,7 +86,11 @@ public class AnalysisController {
             session.setId(sessionId);
             session.setTitle(question.length() > 30 ? question.substring(0, 30) + "..." : question);
             session.setDatasetId(datasetId);
-            session.setModel((String) body.getOrDefault("model", "deepseek-chat"));
+            // 未显式传 model 时取当前生效策略的模型，避免切到 Qwen 后仍记录 deepseek-chat。
+            // Fall back to the active provider's model so session metadata matches the real model in use.
+            session.setModel(body.get("model") != null
+                    ? String.valueOf(body.get("model"))
+                    : llmFactory.current().chatModel());
             session.setCreatedAt(LocalDateTime.now());
             session.setUpdatedAt(LocalDateTime.now());
             metaRepo.saveSession(session);

@@ -9,7 +9,11 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${res.status}`);
   }
-  return res.json() as Promise<T>;
+  // 204 / 空响应体不是错误；返回空对象让调用方解构得到 undefined 而非抛 SyntaxError。
+  // 204 or an empty body is not an error; return {} so callers destructure safely.
+  const text = await res.text();
+  if (!text.trim()) return {} as T;
+  return JSON.parse(text) as T;
 }
 
 export const api = {
@@ -35,11 +39,11 @@ export const api = {
       body: JSON.stringify(input),
     })).entry,
 
-  searchKnowledge: async (query: string, kind?: string, topK = 5): Promise<KnowledgeHit[]> =>
+  searchKnowledge: async (query: string, kind?: string, topK = 5, datasetId?: string): Promise<KnowledgeHit[]> =>
     (await json<{ hits: KnowledgeHit[] }>('/knowledge/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, kind, topK }),
+      body: JSON.stringify({ query, kind, topK, datasetId }),
     })).hits,
 
   getKnowledgeDetail: async (id: string): Promise<Record<string, unknown>> =>
@@ -190,13 +194,19 @@ export const api = {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split('\n\n');
+      // SSE 规范允许 \n\n 或 \r\n\r\n；正则同时匹配两种分隔符。
+      // SSE allows both LF and CRLF event separators; split on either form.
+      const blocks = buffer.split(/\r?\n\r?\n/);
       buffer = blocks.pop() || '';
       for (const block of blocks) {
-        // 使用纯函数解析，便于单元测试 / Use the pure parser for testability.
         const event = parseSSEBlock(block);
         if (event) onEvent(event);
       }
+    }
+    // 流结束时缓冲区可能还有最后一个未以空行结尾的事件 / Flush trailing block without a final blank line.
+    if (buffer.trim()) {
+      const event = parseSSEBlock(buffer);
+      if (event) onEvent(event);
     }
   },
 };

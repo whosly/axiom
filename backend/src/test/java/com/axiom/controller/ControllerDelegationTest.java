@@ -85,19 +85,19 @@ class ControllerDelegationTest {
         verify(knowledgeService).listSources();
     }
 
-    /** 知识 Controller 删除/恢复委托 / Knowledge controller delete/restore delegates. */
+    /** 知识 Controller 删除/恢复与按来源删除委托 / Knowledge controller mutation delegates. */
     @Test
     @DisplayName("知识 Controller 删除与恢复")
     void knowledgeMutation() {
         when(knowledgeService.restore("e1")).thenReturn(true);
-        when(knowledgeService.deleteBySource("src1")).thenReturn(2);
+        when(knowledgeService.deleteSource("src1")).thenReturn(2);
 
         KnowledgeController c = new KnowledgeController(knowledgeService, documentIngestion);
         assertThat(c.restore("e1")).containsKey("success");
-        assertThat(c.deleteBySource("src1")).containsKey("deleted");
+        assertThat(c.deleteSource("src1")).containsKey("deleted");
         c.delete("e1");
         verify(knowledgeService).delete("e1");
         verify(knowledgeService).restore("e1");
-        verify(knowledgeService).deleteBySource("src1");
+        verify(knowledgeService).deleteSource("src1");
     }
 }

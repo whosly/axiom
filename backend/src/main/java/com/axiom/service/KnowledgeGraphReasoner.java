@@ -50,13 +50,16 @@ public class KnowledgeGraphReasoner {
      * @return 社区列表、数量、迭代次数及采样元数据 / Communities, count, iterations and sampling metadata.
      */
     public Map<String, Object> communities(int maxIterations) {
+        // 缓存键与实际算法使用同一钳制值，避免 100 与 50 产生两份相同结果。
+        // Use the same clamped value for the cache key as the algorithm to avoid duplicate entries.
+        int effectiveIterations = Math.max(1, Math.min(maxIterations, 50));
         SnapshotView view = cache.get();
         GraphSnapshot g = view.snapshot();
-        CommunityKey key = new CommunityKey(view.version(), maxIterations);
+        CommunityKey key = new CommunityKey(view.version(), effectiveIterations);
         Map.Entry<CommunityKey, Map<String, Object>> cached = communityCache.get();
         if (cached != null && cached.getKey().equals(key)) return cached.getValue();
 
-        Map<String, Object> result = detectCommunities(g, maxIterations);
+        Map<String, Object> result = detectCommunities(g, effectiveIterations);
         // 附加采样元数据 / Attach sampling metadata.
         Map<String, Object> enriched = new LinkedHashMap<>(result);
         enriched.put("sampled", view.sampled());
@@ -186,6 +189,9 @@ public class KnowledgeGraphReasoner {
      * @return 关联知识列表 / Related entries.
      */
     public Map<String, Object> related(String entryId, int limit) {
+        if (entryId == null || entryId.isBlank()) {
+            throw new IllegalArgumentException("entryId 不能为空 / entryId is required");
+        }
         GraphSnapshot g = cache.get().snapshot();
         String node = entryId.startsWith("knowledge:") ? entryId : "knowledge:" + entryId;
         int start = g.indexOf(node);

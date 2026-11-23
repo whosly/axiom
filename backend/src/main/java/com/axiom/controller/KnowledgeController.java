@@ -123,11 +123,4 @@ public class KnowledgeController {
     public Map<String, Object> restore(@PathVariable String id) {
         return Map.of("success", service.restore(id));
     }
-
-    /** 按来源删除 / Delete by source. */
-    @DeleteMapping("/source/{sourceId}")
-    public Map<String, Object> deleteBySource(@PathVariable String sourceId) {
-        int count = service.deleteBySource(sourceId);
-        return Map.of("success", true, "deleted", count);
-    }
 }

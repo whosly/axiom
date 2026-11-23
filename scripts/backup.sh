@@ -38,18 +38,20 @@ resolve_data_source() {
 }
 
 do_create() {
-  mkdir -p "$BACKUP_DIR"
-  local out="${2:-$BACKUP_DIR/backup-$TIMESTAMP.tar.gz}"
+  # 第二参数始终是输出目录（与用法说明一致）/ Second argument is always an output directory.
+  local target_dir="${2:-$BACKUP_DIR}"
+  mkdir -p "$target_dir"
+  local out="$target_dir/backup-$TIMESTAMP.tar.gz"
   local src
   src="$(resolve_data_source)"
 
   info "创建备份 / Creating backup: $out"
   case "$src" in
     docker:*)
-      # 用临时容器打包 volume 数据 / Use a temporary container to archive the volume.
+      # 用临时容器打包 volume 数据到目标目录 / Archive volume into the target directory via a temp container.
       local vol="${src#docker:}"
-      docker run --rm -v "$vol:/data:ro" -v "$(cd "$BACKUP_DIR" && pwd):/backup" \
-        alpine:3.20 tar czf "/backup/$(basename "$out")" -C /data . \
+      docker run --rm -v "$vol:/data:ro" -v "$(cd "$target_dir" && pwd):/backup" \
+        alpine:3.20 tar czf "/backup/backup-$TIMESTAMP.tar.gz" -C /data . \
         || { err "备份失败 / Backup failed"; exit 1; }
       ;;
     local:*)
@@ -57,6 +59,9 @@ do_create() {
       tar czf "$out" -C "$dir" . || { err "备份失败 / Backup failed"; exit 1; }
       ;;
   esac
+  # Docker 模式下文件由容器内写到挂载目录，这里校验真实落盘路径后再报告。
+  # In Docker mode the container writes to the mounted dir; verify the real path before reporting.
+  [ -f "$out" ] || { err "备份文件未生成 / Backup file not found: $out"; exit 1; }
   info "备份完成 / Backup created: $out ($(du -h "$out" | cut -f1))"
 }
 
@@ -81,8 +86,12 @@ do_restore() {
   case "$src" in
     docker:*)
       local vol="${src#docker:}"
-      docker run --rm -v "$vol:/data" -v "$(dirname "$(realpath "$file")"):/backup:ro" \
-        alpine:3.20 sh -c "rm -rf /data/* && tar xzf /backup/$(basename "$file") -C /data" \
+      # 用 cd+pwd 代替 realpath（旧版 macOS 无 realpath）；文件名经环境变量传入，避免空格拼接出错。
+      # Use cd+pwd instead of realpath (absent on older macOS); pass filename via env to survive spaces.
+      local file_dir="$(cd "$(dirname "$file")" && pwd)"
+      local file_name="$(basename "$file")"
+      docker run --rm -v "$vol:/data" -v "$file_dir:/backup:ro" -e BAK_FILE="$file_name" \
+        alpine:3.20 sh -c 'rm -rf /data/* && tar xzf "/backup/$BAK_FILE" -C /data' \
         || { err "恢复失败 / Restore failed"; exit 1; }
       ;;
     local:*)

@@ -51,7 +51,11 @@ HTTP_PORT="${HTTP_PORT:-80}"
 REGISTRY="${REGISTRY:-}"
 
 # 是否启用公网 HTTPS overlay / Whether to enable public HTTPS overlay
+# 部署模式持久化到文件，保证 prod 部署后 stop/restart/logs/status 仍带 overlay。
+# Persist mode so later stop/restart/logs/status commands keep the HTTPS overlay.
+MODE_FILE="$ROOT_DIR/.deploy-mode"
 USE_PROD=0
+[ -f "$MODE_FILE" ] && [ "$(cat "$MODE_FILE")" = "prod" ] && USE_PROD=1
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -174,6 +178,7 @@ do_status() {
 do_clean() {
   warn "将删除容器与镜像（数据卷保留）/ Removing containers and images (data volume kept)"
   compose down --rmi local
+  rm -f "$MODE_FILE"
   info "清理完成 / Cleaned"
 }
 
@@ -254,7 +259,7 @@ case "${1:-deploy}" in
   logs)    do_logs "$@" ;;
   status)  do_status ;;
   clean)   do_clean ;;
-  prod)    USE_PROD=1; do_prod ;;
+  prod)    USE_PROD=1; echo "prod" > "$MODE_FILE"; do_prod ;;
   push)    do_push ;;
   reset-vectors) do_reset_vectors ;;
   -h|--help|help) usage ;;

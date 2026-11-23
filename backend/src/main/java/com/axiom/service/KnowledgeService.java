@@ -127,12 +127,11 @@ public class KnowledgeService {
         String content = req.getContent() == null ? "" : req.getContent();
         String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
 
-        if (repository.existsByHash(hash)) {
+        KnowledgeEntry existing = repository.findByHash(hash);
+        if (existing != null) {
             log.info("[Knowledge] duplicate content, skip: {}", req.getTitle());
-            // 返回同哈希的已有条目 / Return the existing entry with the same hash.
-            return repository.listAll().stream()
-                    .filter(e -> hash.equals(e.getTextHash()))
-                    .findFirst().orElse(null);
+            // 返回同哈希的已有（未删除）条目 / Return the existing live entry with the same hash.
+            return existing;
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -537,13 +536,21 @@ public class KnowledgeService {
     }
 
     /**
-     * 恢复软删除的知识 / Restore a soft-deleted knowledge entry.
-     * 向量仍在 Zvec 中，无需重建 / Vector is still in Zvec, no rebuild needed.
+     * 恢复软删除的知识并重建向量 / Restore a soft-deleted entry and rebuild its vector.
+     *
+     * <p>delete() 会删除向量，恢复时必须重新写入，否则元数据可见但检索命中不到。
+     * / delete() removes the vector, so restore must rebuild it or retrieval stays inconsistent.
      */
     public boolean restore(String id) {
         KnowledgeEntry e = repository.findByIdIncludingDeleted(id);
         if (e == null || !e.isDeleted()) return false;
         repository.restore(id);
+        // 重建倒排索引 / Rebuild inverted index.
+        repository.indexTerms(id, tokenizer.tokenize(e.getTitle() + " " + e.getContent()));
+        // 重建向量：先标记 pending，按结果更新状态 / Rebuild vector: pending first, then status by result.
+        repository.updateStatus(id, "pending");
+        boolean ok = vectorStore.upsertWithResult(e);
+        repository.updateStatus(id, ok ? "ready" : "vector_failed");
         publishChange(KnowledgeChangedEvent.ChangeType.ADD, id);
         return true;
     }

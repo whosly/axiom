@@ -104,9 +104,10 @@ public class VectorService {
     /** Upsert a piece of semantic text into the vector store. */
     public void upsert(String id, String kind, String refId, String text) {
         if (!ready) return;
+        // Doc 使用 native 内存，finally 无条件释放 / Docs use native memory; free in finally.
+        List<Doc> docs = null;
         try {
-            float[] vector = embeddingFactory.current().embed(text);
-            vector = alignDimension(vector);
+            float[] vector = alignDimension(embeddingFactory.current().embed(text));
 
             Doc doc = new Doc();
             doc.setPK(id);
@@ -115,14 +116,15 @@ public class VectorService {
             doc.addStringField("refId", refId);
             doc.addVectorFP32Field("embedding", vector);
 
-            List<Doc> docs = new ArrayList<>();
+            docs = new ArrayList<>();
             docs.add(doc);
             collection.upsert(docs);
-            Doc.freeDocs(docs);
             collection.flush();
             trackedIds.computeIfAbsent(refId, k -> new ArrayList<>()).add(id);
         } catch (Exception e) {
             log.warn("[Zvec] upsert failed for {}: {}", id, e.getMessage());
+        } finally {
+            if (docs != null) Doc.freeDocs(docs);
         }
     }
 

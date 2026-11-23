@@ -233,7 +233,7 @@ com.axiom.llm/
 embedding 与对话完全解耦，走 `app.embedding.provider`（`local` 或 `api`），与 `app.llm.providers` 无关。
 
 **运行时切换会持久化吗？**
-不会。热更新只改内存中的配置 bean，重启后回到 `application.yml` / 环境变量的值。要持久化请改配置文件。
+厂商与模型选择会持久化到 `data/llm-config.json`（**API Key 不落盘**），重启后仍生效，且优先级高于 `application.yml`。API Key 始终从环境变量或配置文件读取；通过配置面板临时输入的 Key 重启后需重新提供。要改回出厂值，删除该文件即可。
 
 **如何为新厂商写测试？**
 参考 `backend/src/test/java/com/axiom/llm/LlmProviderStrategyTest.java`，构造 AppProperties + 两个真实 Provider + 工厂即可验证发现/切换/隔离。

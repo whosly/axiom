@@ -20,7 +20,7 @@
 
 | 方式 | 适用场景 | 前置条件 |
 |---|---|---|
-| Docker 一键 | 推荐。含前端编译、后端打包、模型下载、健康检查 | Docker 20.10+ / Compose v2+，磁盘 ≥3GB、内存 ≥2GB |
+| Docker 一键 | 推荐。含前端编译、后端打包、模型下载、健康检查 | Docker 20.10+ / Compose v2.24+（用了 `env_file` 的 `path/required` 语法），磁盘 ≥3GB、内存 ≥2GB |
 | 本地 jar | 已有 JDK/Maven/Node，或需要直接调试 | JDK 17+ / Maven 3.6+ / Node 18+ |
 
 两种方式都无需外部 API Key 即可运行：默认本地 ONNX embedding，无 LLM Key 时自动降级规则引擎。
@@ -89,10 +89,10 @@ Stage 3  eclipse-temurin:17-jre
          └─ app.jar + JRE + 模型（最终镜像约 500MB）
 ```
 
-基础镜像可通过 build arg 替换：
+基础镜像可通过 build arg 替换（注意运行时阶段用了 `apt-get`，**不能换成 Alpine 变体**）：
 
 ```bash
-docker compose build --build-arg JRE_IMAGE=eclipse-temurin:17-jre-alpine
+docker compose build --build-arg JRE_IMAGE=eclipse-temurin:17-jre
 ```
 
 弱网构建：设置 `MAVEN_MIRROR=https://maven.aliyun.com/repository/public` 加速 Maven 依赖；模型下载失败则换 `MODEL_MIRROR`，或按 [第 6 节](#6-embedding-模型) 手动放模型后改用 `COPY`。构建期需要网络，运行期完全离线。
@@ -153,7 +153,7 @@ Nginx 要点：`/api/chat` 单独配置 `proxy_buffering off` 和 300s 读超时
 APP_PORT=9090 JAVA_OPTS=-Xmx2g DEEPSEEK_API_KEY=sk-xxx ./scripts/docker-deploy.sh deploy
 ```
 
-配置文件位于 `backend/src/main/resources/application.yml`，所有厂商共享 `app.llm.providers.<name>.*` 结构。运行时可在前端「配置」面板热切换厂商与模型，无需重启——但热更新只改内存，重启后回到配置文件的值。
+配置文件位于 `backend/src/main/resources/application.yml`，所有厂商共享 `app.llm.providers.<name>.*` 结构。运行时可在前端「配置」面板热切换厂商与模型，无需重启——厂商与模型选择会写入 `data/llm-config.json`（API Key 不落盘），重启后仍生效。
 
 ---
 
@@ -208,10 +208,10 @@ rm -rf backend/data/zvec/dataset_semantics backend/data/zvec/knowledge_base_v2
 | 外部依赖 | 无 | SiliconFlow + API Key |
 | 网络 | 运行期离线 | 每次 embed 都需网络 |
 | 隐私 | 数据不出本机 | 文本发往第三方 |
-| 向量维度 | 512 | 1024（bge-m3） |
+| 向量维度 | 512 | 由 `EMBEDDING_DIMENSION` 决定（默认 512） |
 | 首次延迟 | 模型加载 ~2 秒 | 网络往返 |
 
-切回远程：设 `EMBEDDING_PROVIDER=api` 并配 `EMBEDDING_API_KEY`，同时把 `ZVEC_DIMENSION` 改回 1024 并重建 collection。
+切回远程：设 `EMBEDDING_PROVIDER=api` 并配 `EMBEDDING_API_KEY`。请求会显式传 `dimensions=EMBEDDING_DIMENSION`；若服务商不支持该参数且返回维度不符，应用会报错而非静默截断——此时需把 `EMBEDDING_DIMENSION`、`ZVEC_DIMENSION` 同时改为模型实际维度并重建 collection。
 
 ---
 

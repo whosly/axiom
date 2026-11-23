@@ -210,6 +210,9 @@ public class AnalysisEngine {
         double q1 = sorted.get((int) (sorted.size() * 0.25));
         double q3 = sorted.get((int) (sorted.size() * 0.75));
         double iqr = q3 - q1;
+        // IQR=0（超 75% 的值相同）时围栏退化为单点，会把所有不同值误判为异常；此时禁用 IQR 分支。
+        // When IQR is zero the fences collapse to one point and flag everything; disable that branch.
+        boolean iqrUsable = iqr > 0;
         double lowFence = q1 - 1.5 * iqr, highFence = q3 + 1.5 * iqr;
 
         List<Map<String, Object>> out = new ArrayList<>();
@@ -218,7 +221,7 @@ public class AnalysisEngine {
             if (!(vObj instanceof Number)) continue;
             double v = ((Number) vObj).doubleValue();
             double z = sd > 0 ? (v - mean) / sd : 0;
-            if (Math.abs(z) > 2.0 || v < lowFence || v > highFence) {
+            if (Math.abs(z) > 2.0 || (iqrUsable && (v < lowFence || v > highFence))) {
                 Map<String, Object> a = new LinkedHashMap<>(r);
                 a.put("deviation", Math.round(Math.abs(z) * 100) / 100.0);
                 a.put("direction", v > mean ? "高" : "低");
@@ -357,9 +360,11 @@ public class AnalysisEngine {
 
     private String safeOp(String op) {
         return switch (op) {
-            case ">", "<", ">=", "<=", "!=", "<>" -> op;
-            case "like" -> "LIKE";
-            default -> "=";
+            case ">", "<", ">=", "<=", "!=", "<>", "=" -> op;
+            case "like", "LIKE" -> "LIKE";
+            // 未知操作符静默改成 = 会返回错误结果；直接拒绝，让问题暴露。
+            // Silently mapping an unknown operator to = produces wrong results; fail loudly instead.
+            default -> throw new IllegalArgumentException("不支持的过滤操作符 / Unsupported filter operator: " + op);
         };
     }
 

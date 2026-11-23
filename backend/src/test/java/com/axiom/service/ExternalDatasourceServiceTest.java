@@ -1,6 +1,5 @@
 package com.axiom.service;
 
-import com.axiom.config.AppProperties;
 import com.axiom.model.ExternalDatasource;
 import com.axiom.repository.DatasetRepository;
 import com.axiom.repository.ExternalDatasourceRepository;
@@ -12,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 
@@ -37,7 +35,6 @@ class ExternalDatasourceServiceTest {
     @Mock private MetadataRepository metaRepo;
     @Mock private DataIngestionService ingestion;
     @Mock private AnalysisOrchestrator orchestrator;
-    @Mock private ApplicationEventPublisher eventPublisher;
 
     private ExternalDatasourceService service;
 
@@ -45,7 +42,7 @@ class ExternalDatasourceServiceTest {
     @BeforeEach
     void setUp() {
         service = new ExternalDatasourceService(repo, crypto, datasetRepo, metaRepo,
-                ingestion, new ObjectMapper(), orchestrator, new AppProperties(), eventPublisher);
+                ingestion, new ObjectMapper(), orchestrator);
     }
 
     /** 注册时密码加密、类型小写、密码不回显 / Registration encrypts password and normalizes type. */
@@ -92,5 +89,18 @@ class ExternalDatasourceServiceTest {
         assertThatThrownBy(() -> service.importQuery("ds1", "SELECT 1; DROP TABLE t", 100, "name"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("多条");
+    }
+
+    /** 只读守卫：拒绝 data-modifying CTE（WITH 前缀绕过）/ Reject data-modifying CTEs. */
+    @Test
+    @DisplayName("拒绝写操作 CTE")
+    void rejectsDataModifyingCte() {
+        ExternalDatasource ds = new ExternalDatasource();
+        ds.setId("ds1");
+        when(repo.findById("ds1")).thenReturn(ds);
+        assertThatThrownBy(() -> service.importQuery("ds1",
+                "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", 100, "name"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("写操作");
     }
 }

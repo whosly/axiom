@@ -28,20 +28,21 @@ public class ZvecController {
     private final VectorService vectorService;
     private final KnowledgeVectorStore knowledgeStore;
     private final ZvecInspector inspector;
+    private final com.axiom.config.AppProperties props;
 
     /** 列出所有 collection 概览 / List overview of all collections. */
     @GetMapping("/collections")
     public Map<String, Object> collections() {
         List<Map<String, Object>> list = new ArrayList<>();
-        list.add(inspector.overview("dataset_semantics", vectorService.rawCollection(), vectorService.isReady()));
-        list.add(inspector.overview("knowledge_base", knowledgeStore.rawCollection(), knowledgeStore.isReady()));
+        list.add(inspector.overview(props.getZvec().getCollection(), vectorService.rawCollection(), vectorService.isReady()));
+        list.add(inspector.overview(props.getZvec().getKnowledgeCollection(), knowledgeStore.rawCollection(), knowledgeStore.isReady()));
         return Map.of("collections", list);
     }
 
     /**
      * 列出某 collection 的文档 / List documents of a collection.
      *
-     * @param name  collection 名称（dataset_semantics | knowledge_base）/ Collection name.
+     * @param name  collection 名称（配置中的 collection / knowledge-collection）/ Collection name.
      * @param limit 最多返回条数 / Max docs.
      */
     @GetMapping("/collections/{name}/docs")
@@ -68,10 +69,12 @@ public class ZvecController {
 
     /** 根据名称解析 collection / Resolve collection by name. */
     private org.zvec.binding.Collection resolve(String name) {
-        return switch (name) {
-            case "dataset_semantics" -> vectorService.isReady() ? vectorService.rawCollection() : null;
-            case "knowledge_base" -> knowledgeStore.isReady() ? knowledgeStore.rawCollection() : null;
-            default -> null;
-        };
+        if (props.getZvec().getCollection().equals(name)) {
+            return vectorService.isReady() ? vectorService.rawCollection() : null;
+        }
+        if (props.getZvec().getKnowledgeCollection().equals(name)) {
+            return knowledgeStore.isReady() ? knowledgeStore.rawCollection() : null;
+        }
+        return null;
     }
 }

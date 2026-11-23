@@ -154,7 +154,10 @@ public class KnowledgeGraphService {
      * @return 邻居节点及连接边 / Neighbor nodes and connecting edges.
      */
     public Map<String, Object> neighbors(String nodeId, int hops) {
-        Set<String> ids = graphRepo.neighbors(nodeId, Math.max(1, Math.min(hops, 5)));
+        // 先钳制再使用并回传，避免响应里的 hops 与实际计算跳数不符。
+        // Clamp before both use and response so the reported hops matches the actual traversal.
+        int effectiveHops = Math.max(1, Math.min(hops, 5));
+        Set<String> ids = graphRepo.neighbors(nodeId, effectiveHops);
         List<Map<String, Object>> allNodes = graphRepo.listNodes();
         List<Map<String, Object>> subNodes = new ArrayList<>();
         for (Map<String, Object> n : allNodes) {
@@ -168,7 +171,7 @@ public class KnowledgeGraphService {
             String target = String.valueOf(mapValue(e, "target"));
             if (ids.contains(source) && ids.contains(target)) subEdges.add(e);
         }
-        return Map.of("center", nodeId, "hops", hops, "nodes", subNodes, "edges", subEdges);
+        return Map.of("center", nodeId, "hops", effectiveHops, "nodes", subNodes, "edges", subEdges);
     }
 
     /**

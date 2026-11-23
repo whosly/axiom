@@ -1,6 +1,5 @@
 package com.axiom.service;
 
-import com.axiom.config.AppProperties;
 import com.axiom.domain.KnowledgeChangedEvent;
 import com.axiom.model.*;
 import com.axiom.repository.DatasetRepository;
@@ -9,7 +8,6 @@ import com.axiom.repository.MetadataRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -17,6 +15,7 @@ import java.security.MessageDigest;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * 外部 JDBC 数据源服务 / External JDBC datasource service.
@@ -39,8 +38,10 @@ public class ExternalDatasourceService {
     private final DataIngestionService ingestion;
     private final ObjectMapper mapper;
     private final AnalysisOrchestrator orchestrator;
-    private final AppProperties props;
-    private final ApplicationEventPublisher eventPublisher;
+
+    /** data-modifying CTE 关键字，词边界匹配避免误伤列名 / Write keywords with word boundaries to avoid column-name false positives. */
+    private static final Pattern WRITE_KEYWORD = Pattern.compile(
+            "\\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CALL|EXEC|EXECUTE)\\b");
 
     /**
      * 注册数据源（密码加密存储）/ Register a datasource with encrypted password.
@@ -114,6 +115,12 @@ public class ExternalDatasourceService {
             throw new IllegalArgumentException("仅允许只读查询（SELECT/WITH/SHOW）/ Only read-only queries allowed");
         }
         if (upper.contains(";")) throw new IllegalArgumentException("不允许多条语句 / Multiple statements not allowed");
+        // WITH 可构造 data-modifying CTE（WITH x AS (DELETE ... RETURNING ...)），前缀校验会漏过。
+        // 对 WITH 语句额外扫描顶层关键字，命中写操作直接拒绝。
+        // A data-modifying CTE can start with WITH and still write; scan for write keywords.
+        if (upper.startsWith("WITH") && WRITE_KEYWORD.matcher(upper).find()) {
+            throw new IllegalArgumentException("WITH 查询中不允许写操作（INSERT/UPDATE/DELETE/MERGE 等）/ Data-modifying CTE not allowed");
+        }
 
         List<String> headers = new ArrayList<>();
         List<Map<String, Object>> rows = new ArrayList<>();

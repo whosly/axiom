@@ -243,7 +243,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_edge_target ON kg_edges(target);
 - 最短路径：BFS
 - 关联分析：基于邻居子图
 
-API：`POST /api/knowledge/graph/reason/communities`、`GET /api/knowledge/graph/reason/path?from=&to=`、`GET /api/knowledge/graph/reason/related?entryId=`。
+API（均为 GET）：`GET /api/knowledge/graph/reason/communities?maxIterations=20`、`GET /api/knowledge/graph/reason/path?from=&to=`、`GET /api/knowledge/graph/reason/related?entryId=&limit=10`。
 
 ### 4.6 推理性能设计
 
@@ -311,7 +311,8 @@ app:
 | GET | `/nodes` | 全部节点 |
 | GET | `/edges` | 全部边 |
 | GET | `/neighbors?nodeId=&hops=` | N 跳邻居子图（hops 钳制 1~5） |
-| GET | `/stats` | 节点/边统计与按类型分组 |
+
+统计信息包含在 `GET /api/knowledge/graph` 的 `stats` 字段中，无独立 `/stats` 端点。
 
 前端 `KnowledgeGraphView.tsx` 用 ECharts `type:'graph', layout:'force'`（`repulsion:260, edgeLength:90`），支持拖拽缩放、边标签、选节点查 2 跳邻居，同时兼容 H2 大写键与 SQLite 小驼峰键。通过 `KnowledgePanel.tsx` 的五个 Tab 集成（条目/图谱/推理/Zvec/来源）。
 

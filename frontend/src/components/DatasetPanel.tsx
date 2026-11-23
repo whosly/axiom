@@ -12,7 +12,6 @@ interface Props {
   onSelect: (id: string) => void;
   onCreated: (d: Dataset) => void;
   onDeleted: (id: string) => void;
-  onRefresh: () => void;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -23,7 +22,7 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 export function DatasetPanel({
-  datasets, selectedId, loading, onSelect, onCreated, onDeleted, onRefresh,
+  datasets, selectedId, loading, onSelect, onCreated, onDeleted,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [pasteOpen, setPasteOpen] = useState(false);

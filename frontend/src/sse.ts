@@ -12,12 +12,15 @@ import type { SSEEvent } from './types';
  * @returns 解析后的事件，非法块返回 null / Parsed event, or null for malformed blocks
  */
 export function parseSSEBlock(block: string): SSEEvent | null {
-  const lines = block.split('\n');
+  // 兼容 CRLF 行尾，并合并多行 data: 字段（SSE 规范用换行连接）。
+  // Tolerate CRLF and join multi-line data fields per the SSE spec.
+  const lines = block.split(/\r?\n/);
   const eventLine = lines.find(l => l.startsWith('event:'));
-  const dataLine = lines.find(l => l.startsWith('data:'));
-  if (!dataLine) return null;
+  const dataLines = lines.filter(l => l.startsWith('data:'));
+  if (dataLines.length === 0) return null;
+  const payload = dataLines.map(l => l.slice(5).trimStart()).join('\n').trim();
   try {
-    const data = JSON.parse(dataLine.slice(5).trim());
+    const data = JSON.parse(payload);
     const type = eventLine ? eventLine.slice(6).trim() : 'text';
     switch (type) {
       case 'plan': return { type: 'plan', plan: data } as SSEEvent;

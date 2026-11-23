@@ -11,7 +11,7 @@
 [![Spring Boot 3.3](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F?style=flat-square)](https://spring.io)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)](https://react.dev)
 [![DuckDB](https://img.shields.io/badge/DuckDB-embedded-FFF200?style=flat-square)](https://duckdb.org)
-[![Tests](https://img.shields.io/badge/tests-77%20passed-2EA043?style=flat-square)](docs/DEPLOYMENT.md#9-验证与故障排查)
+[![Tests](https://img.shields.io/badge/tests-86%20passed-2EA043?style=flat-square)](docs/DEPLOYMENT.md#9-验证与故障排查)
 
 </div>
 
@@ -200,7 +200,7 @@ cd backend && java -jar target/axiom-1.0.0.jar
 | 后端 XML / Backend | `reports/coverage/backend/jacoco.xml` |
 | 前端明细 / Frontend | `reports/coverage/frontend/coverage.txt` |
 
-后端 64 个测试、前端 13 个测试（SSE 解析）。后端未覆盖部分主要是依赖真实数据库 / ONNX 模型 / Zvec native 的集成型代码。
+后端 71 个测试、前端 15 个测试（SSE 解析）。后端未覆盖部分主要是依赖真实数据库 / ONNX 模型 / Zvec native 的集成型代码。
 
 单独运行：
 
@@ -224,7 +224,9 @@ cd frontend && npm run test:coverage
 | `GET` | `/api/datasets/{id}/preview` | 数据预览 |
 | `DELETE` | `/api/datasets/{id}` | 删除数据集 |
 | `POST` | `/api/chat` | SSE 流式分析对话 |
-| `GET` `DELETE` | `/api/sessions` | 会话管理 |
+| `GET` | `/api/sessions` | 会话列表 |
+| `GET` | `/api/sessions/{id}` | 会话详情 |
+| `DELETE` | `/api/sessions/{id}` | 删除会话 |
 | `POST` | `/api/knowledge/entry` | 录入知识（指标 / 术语 / 模板） |
 | `GET` | `/api/knowledge` | 知识列表与统计 |
 | `POST` | `/api/knowledge/search` | 知识混合检索测试 |
@@ -240,7 +242,7 @@ cd frontend && npm run test:coverage
 | Embedding | `EMBEDDING_PROVIDER=local\|api`，详见 [部署与扩展](docs/DEPLOYMENT.md#6-embedding-模型) | `local` |
 | 元数据库 | `METADATA_TYPE=h2\|sqlite` | `h2` |
 | 向量库 | `ZVEC_ENABLED=false` 关闭 | `true` |
-| 数据目录 | `DATA_DIR` | `./data` |
+| 运行时配置目录 | `DATA_DIR`（仅影响 `llm-config.json`；数据库/向量/模型路径由各自变量控制） | `./data` |
 | Rerank 策略 | `RERANK_PROVIDER=auto\|llm\|rule` | `auto` |
 
 ---

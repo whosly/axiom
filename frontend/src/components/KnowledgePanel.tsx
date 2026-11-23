@@ -100,15 +100,21 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const doSearch = async () => {
     if (!query.trim()) return;
     setBusy(true);
-    try { setHits(await api.searchKnowledge(query, undefined, 5)); }
+    // 传入当前数据集，让检索测试台的结果与真实分析链路的知识范围一致。
+    // Pass the active dataset so test results match what the analysis pipeline actually sees.
+    try { setHits(await api.searchKnowledge(query, undefined, 5, datasetId || undefined)); }
     catch (e) { alert('检索失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
 
   const remove = async (id: string) => {
     if (!window.confirm('确定删除这条知识吗？')) return;
-    await api.deleteKnowledge(id);
-    await refresh();
+    try {
+      await api.deleteKnowledge(id);
+      await refresh();
+    } catch (e) {
+      alert('删除失败: ' + (e as Error).message);
+    }
   };
 
   // 打开详情：加载元数据+向量状态+处理链路 / Open detail: load metadata + vector status + lineage

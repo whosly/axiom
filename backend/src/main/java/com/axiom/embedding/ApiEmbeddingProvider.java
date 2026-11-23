@@ -46,6 +46,9 @@ public class ApiEmbeddingProvider implements EmbeddingProvider {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", emb.getModel());
         body.put("input", text);
+        // 显式请求配置维度，避免模型默认维度（如 bge-m3 的 1024）与 Zvec 维度不一致。
+        // Request the configured dimension so the model default does not mismatch the vector store.
+        body.put("dimensions", emb.getDimension());
 
         Request request;
         try {
@@ -67,8 +70,18 @@ public class ApiEmbeddingProvider implements EmbeddingProvider {
             }
             JsonNode root = mapper.readTree(response.body().string());
             JsonNode vector = root.path("data").path(0).path("embedding");
+            if (!vector.isArray() || vector.isEmpty()) {
+                throw new IllegalStateException("Embedding API returned an empty vector");
+            }
             float[] result = new float[vector.size()];
             for (int i = 0; i < vector.size(); i++) result[i] = (float) vector.get(i).asDouble();
+            // 上游若忽略 dimensions 参数返回不同维度，这里立即报错，避免后续被静默截断成错误语义。
+            // Fail fast when the provider ignores dimensions; silent truncation would corrupt the vector.
+            if (result.length != emb.getDimension()) {
+                throw new IllegalStateException("Embedding dimension mismatch: expected "
+                        + emb.getDimension() + " but got " + result.length
+                        + ". Set embedding.api.dimension and zvec.dimension consistently.");
+            }
             return result;
         } catch (IOException e) {
             throw new IllegalStateException("Embedding request failed: " + e.getMessage(), e);

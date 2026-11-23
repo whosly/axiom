@@ -79,3 +79,17 @@ test('空块返回 null / empty block returns null', () => {
   assert.equal(parseSSEBlock(''), null);
   assert.equal(parseSSEBlock('\n\n'), null);
 });
+
+test('CRLF 行尾也能解析 / CRLF line endings are parsed', () => {
+  const event = parseSSEBlock('event: status\r\ndata: {"stage":"planning","message":"思考中"}');
+  assert.ok(event);
+  assert.equal(event.type, 'status');
+  assert.equal((event as any).stage, 'planning');
+});
+
+test('多行 data 字段按换行合并 / multi-line data fields are joined', () => {
+  // 模拟合法 JSON 被拆到两个 data 行 / Simulate valid JSON split across two data lines.
+  const event = parseSSEBlock('event: text\ndata: {"content":\ndata: "hello"}');
+  assert.ok(event);
+  assert.equal((event as any).content, 'hello');
+});

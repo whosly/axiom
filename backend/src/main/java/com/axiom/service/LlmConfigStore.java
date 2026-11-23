@@ -17,13 +17,12 @@ import java.util.Map;
  * 运行时 LLM 配置持久化 / Runtime LLM configuration persistence.
  *
  * <p>把通过配置面板热更新的 provider 选择与各厂商配置写入 data/llm-config.json，
- * 应用启动时加载覆盖，避免重启后 API Key 丢失。环境变量/application.yml 仍是初始值；
- * 持久化文件是「用户运行期覆盖」，优先级更高。API Key 以明文存本地数据目录（与项目其他
- * 凭据同域），文件权限设置为仅属主可读写。
+ * 应用启动时加载覆盖。**API Key 不落盘**：密钥只从环境变量/application.yml 提供，
+ * 避免明文凭据 leaked 到数据目录或 git。持久化文件是「用户运行期非敏感覆盖」，优先级更高。
  *
- * Persists runtime-updated provider selection and per-vendor configs to data/llm-config.json
- * and reloads on startup, so API keys survive restarts. Env/yml provide initial values; the
- * persisted file is a higher-priority runtime override. File perms are owner-only.
+ * Persists runtime-updated provider/model selection to data/llm-config.json and reloads on
+ * startup. API keys are intentionally NOT persisted; they stay in env/yml only so no plaintext
+ * credential is written to disk.
  */
 @Slf4j
 @Component
@@ -71,7 +70,18 @@ public class LlmConfigStore {
             Files.createDirectories(file.getParent());
             Persisted p = new Persisted();
             p.provider = props.getLlm().getProvider();
-            p.providers = new java.util.LinkedHashMap<>(props.getLlm().getProviders());
+            // 深拷贝并清空 apiKey：密钥只保留在内存与 env/yml，不写盘。
+            // Deep-copy and blank apiKey: credentials stay in memory and env/yml, never on disk.
+            p.providers = new java.util.LinkedHashMap<>();
+            props.getLlm().getProviders().forEach((name, cfg) -> {
+                LlmProviderConfig safe = new LlmProviderConfig();
+                safe.setBaseUrl(cfg.getBaseUrl());
+                safe.setChatModel(cfg.getChatModel());
+                safe.setReasonerModel(cfg.getReasonerModel());
+                safe.setTemperature(cfg.getTemperature());
+                safe.setMaxTokens(cfg.getMaxTokens());
+                p.providers.put(name, safe);
+            });
             mapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), p);
             try {
                 Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions

@@ -144,6 +144,9 @@ public class KnowledgeVectorStore {
      */
     public boolean upsertWithResult(KnowledgeEntry entry) {
         if (!ready || entry.getContent() == null || entry.getContent().isBlank()) return false;
+        // Doc 使用 native 内存；用局部变量持有，finally 无条件释放，避免异常路径泄漏。
+        // Docs use native memory; hold in a local and free in finally so exception paths cannot leak.
+        List<Doc> docs = null;
         try {
             float[] vector = alignDimension(embeddingFactory.current().embed(entry.getContent()));
 
@@ -158,16 +161,16 @@ public class KnowledgeVectorStore {
             doc.addInt32Field("chunkIndex", entry.getChunkIndex());
             doc.addVectorFP32Field("embedding", vector);
 
-            List<Doc> docs = new ArrayList<>();
+            docs = new ArrayList<>();
             docs.add(doc);
             collection.upsert(docs);
-            // Doc 使用 native 内存，必须显式释放，否则会泄漏 / Docs use native memory and must be freed explicitly.
-            Doc.freeDocs(docs);
             collection.flush();
             return true;
         } catch (Exception e) {
             log.warn("[KnowledgeVector] upsert failed for {}: {}", entry.getId(), e.getMessage());
             return false;
+        } finally {
+            if (docs != null) Doc.freeDocs(docs);
         }
     }
 

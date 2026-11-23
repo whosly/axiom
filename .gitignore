@@ -39,6 +39,8 @@ backend/data/
 !.env.example
 *.key
 *.pem
+# 运行时 LLM 配置（含厂商设置，可能含历史版本明文密钥）/ Runtime LLM config
+**/llm-config.json
 
 # === IDE 与系统文件 / IDE & OS files ===
 .vscode/
@@ -57,6 +59,7 @@ Thumbs.db
 # === 日志与运行时文件 / Logs & runtime files ===
 *.log
 *.pid
+.deploy-mode
 logs/
 
 # === 浏览器测试临时文件 / Browser test artifacts ===
