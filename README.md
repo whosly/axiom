@@ -5,14 +5,13 @@
 **确定性分析内核 / The Deterministic Analytics Engine**
 
 > 自然语言是入口，不是裁判。  
-> 模型理解意图，引擎给出事实。  
-> *Natural language in. Facts out.*
+> 模型理解意图，引擎给出事实。
 
 [![Java 17](https://img.shields.io/badge/Java-17-E76F00?style=flat-square)](https://www.java.com)
 [![Spring Boot 3.3](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F?style=flat-square)](https://spring.io)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)](https://react.dev)
 [![DuckDB](https://img.shields.io/badge/DuckDB-embedded-FFF200?style=flat-square)](https://duckdb.org)
-[![Tests](https://img.shields.io/badge/tests-77%20passed-2EA043?style=flat-square)](docs/PROJECT_QA.md)
+[![Tests](https://img.shields.io/badge/tests-77%20passed-2EA043?style=flat-square)](docs/DEPLOYMENT.md#9-验证与故障排查)
 
 </div>
 
@@ -89,7 +88,7 @@ Axiom 是一个全栈 AI 数据分析系统。上传数据，用自然语言提�
 | 向量库 | Zvec（嵌入式，双 collection） | 数据集语义与知识库隔离 |
 | 大模型 | DeepSeek / 通义千问，OpenAI 兼容策略模式 | 可插拔，新增厂商约 5 行代码 |
 | Embedding | 本地 ONNX（bge-small-zh-v1.5）/ 远程 API | 默认零外部依赖 |
-| 知识底座 | 统一 `KnowledgeEntry` + 混合检索 | 详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
+| 知识底座 | 统一 `KnowledgeEntry` + 混合检索 | 详见 [架构设计](docs/ARCHITECTURE.md) |
 | 部署 | 单可执行 jar，前端静态资源内嵌 | 一条命令，常驻服务 |
 
 ---
@@ -137,7 +136,7 @@ cp .env.example .env        # 可选：填入 DEEPSEEK_API_KEY 或 QWEN_API_KEY
 # 公网 HTTPS：配置 DOMAIN 后执行 ./scripts/docker-deploy.sh prod
 ```
 
-无需本地安装 JDK / Maven / Node，全部在镜像内完成。详见 [docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md)。
+无需本地安装 JDK / Maven / Node，全部在镜像内完成。详见 [部署与扩展](docs/DEPLOYMENT.md#3-docker-一键部署)。
 
 ### 本地构建 / Local Build
 
@@ -154,7 +153,7 @@ export EMBEDDING_API_KEY=你的嵌入密钥  # 可选，仅 embedding.provider=a
 
 零密钥也能运行（规则引擎降级）；运行时可在前端「配置」面板热切换厂商与模型。
 
-> 新增 LLM 厂商或换模型？见 [LLM 厂商与模型扩展指南](docs/LLM_PROVIDER_GUIDE.md)：换模型零代码，新增 OpenAI 兼容厂商约 5 行代码。
+> 新增 LLM 厂商或换模型？见 [部署与扩展](docs/DEPLOYMENT.md#7-llm-厂商与模型扩展)：换模型零代码，新增 OpenAI 兼容厂商约 5 行代码。
 
 **2. 构建**
 
@@ -237,8 +236,8 @@ cd frontend && npm run test:coverage
 
 | 项 | 方式 | 默认值 |
 |---|---|---|
-| LLM 厂商 / 模型 | `LLM_PROVIDER`，详见 [扩展指南](docs/LLM_PROVIDER_GUIDE.md) | `deepseek` |
-| Embedding | `EMBEDDING_PROVIDER=local\|api`，详见 [本地部署](docs/LOCAL_DEPLOYMENT.md) | `local` |
+| LLM 厂商 / 模型 | `LLM_PROVIDER`，详见 [部署与扩展](docs/DEPLOYMENT.md#7-llm-厂商与模型扩展) | `deepseek` |
+| Embedding | `EMBEDDING_PROVIDER=local\|api`，详见 [部署与扩展](docs/DEPLOYMENT.md#6-embedding-模型) | `local` |
 | 元数据库 | `METADATA_TYPE=h2\|sqlite` | `h2` |
 | 向量库 | `ZVEC_ENABLED=false` 关闭 | `true` |
 | 数据目录 | `DATA_DIR` | `./data` |
@@ -248,24 +247,11 @@ cd frontend && npm run test:coverage
 
 ## 文档 / Documentation
 
-**核心设计**
-
 | 文档 | 内容 |
 |---|---|
-| [知识库设计](docs/KNOWLEDGE_BASE.md) | 存储、检索、双写一致性、Rerank、知识图谱 |
-| [知识图谱实现](docs/KNOWLEDGE_GRAPH.md) | 数据模型、构建流程、BFS 查询、已知限制与 GraphRAG 演进 |
-| [图谱推理性能设计](docs/GRAPH_REASONING_PERFORMANCE.md) | 版本快照、紧凑图、大图采样、结果缓存 |
-| [分析领域 DDD 模型](docs/DDD_ANALYSIS_MODEL.md) | 枚举值对象与 period 缺陷修复 |
-| [项目问答](docs/PROJECT_QA.md) | 13 个关键设计问题 |
-| [产品路线图](docs/ROADMAP.md) | 已完成功能、Backlog 与方向决策 |
-
-**部署与扩展**
-
-| 文档 | 内容 |
-|---|---|
-| [Docker 一键部署](docs/DOCKER_DEPLOYMENT.md) | 编译、打包、启动、公网 HTTPS、镜像推送 |
-| [本地部署](docs/LOCAL_DEPLOYMENT.md) | bge-small-zh-v1.5 ONNX 模型下载与配置 |
-| [LLM 厂商与模型扩展](docs/LLM_PROVIDER_GUIDE.md) | 新增厂商 / 换模型的配置与实现步骤 |
+| [架构设计](docs/ARCHITECTURE.md) | 领域模型、知识库、知识图谱、存储布局与设计决策 |
+| [部署与扩展](docs/DEPLOYMENT.md) | 本地 / Docker / HTTPS 部署、Embedding 模型、LLM 厂商扩展、故障排查 |
+| [产品路线图](docs/ROADMAP.md) | 已完成功能、明确不做的事项与变更记录 |
 
 ---
 
@@ -279,6 +265,7 @@ axiom/
 ├── scripts/
 │   ├── docker-deploy.sh       # Docker 一键部署
 │   ├── local-deploy.sh        # 本地 jar 常驻部署
+│   ├── coverage.sh            # 一键测试覆盖率
 │   └── backup.sh              # 数据备份与恢复
 ├── nginx/                     # 反向代理与证书
 ├── .env.example               # 环境变量模板
@@ -309,9 +296,6 @@ axiom/
 
 ---
 
-<div align="center">
+## 许可 / License
 
-**Axiom** — 让每个数字都有据可依。  
-*Every number, accounted for.*
-
-</div>
+见 [LICENSE](LICENSE)。
