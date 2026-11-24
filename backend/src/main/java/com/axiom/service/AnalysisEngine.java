@@ -25,6 +25,8 @@ import java.util.*;
 public class AnalysisEngine {
 
     private final DatasetRepository datasetRepo;
+    /** 知识库服务：取公式注册表，驱动确定性指标计算 / Knowledge service: formula registry for deterministic metrics. */
+    private final KnowledgeService knowledgeService;
 
     /**
      * 执行分析计划 / Execute an analysis plan.
@@ -36,13 +38,16 @@ public class AnalysisEngine {
     public AnalysisResult execute(Dataset dataset, AnalysisPlan plan) {
         String table = dataset.getTableName();
         AnalysisIntent intent = plan.getIntent() == null ? AnalysisIntent.QUERY : plan.getIntent();
+        // 公式注册表：指标命中公式时按 aggregate-then-compute 编译，数值完全确定性。
+        // / Formula registry: metrics matching a formula compile deterministically.
+        Map<String, String> formulas = knowledgeService.formulaIndex();
         try {
             return switch (intent) {
-                case TREND -> trend(dataset, plan, table);
-                case ANOMALY -> anomaly(dataset, plan, table);
-                case COMPARE -> compare(dataset, plan, table);
+                case TREND -> trend(dataset, plan, table, formulas);
+                case ANOMALY -> anomaly(dataset, plan, table, formulas);
+                case COMPARE -> compare(dataset, plan, table, formulas);
                 case SUMMARY -> summary(dataset, plan, table);
-                case QUERY -> query(dataset, plan, table);
+                case QUERY -> query(dataset, plan, table, formulas);
             };
         } catch (Exception e) {
             log.error("[Analysis] failed: {}", e.getMessage(), e);
@@ -54,9 +59,25 @@ public class AnalysisEngine {
         }
     }
 
+    /**
+     * 指标的聚合表达式：命中公式则编译公式（确定性），否则普通聚合。
+     * 编译失败（字段缺失/循环/语法）必须显式报错——静默退化为普通聚合会返回错误数字。
+     * / Aggregate expression for a metric: compile the formula when one matches.
+     * Compilation failures surface loudly — silent degradation would return wrong numbers.
+     */
+    private String aggExpr(AnalysisPlan plan, String metric, Map<String, String> formulas, Dataset dataset) {
+        String agg = plan.getAggregation().getSql();
+        if (formulas.containsKey(metric)) {
+            Set<String> columns = dataset.getColumns().stream()
+                    .map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+            return FormulaCompiler.compile(formulas.get(metric), formulas::get, columns::contains, agg);
+        }
+        return agg + "(" + q(metric) + ")";
+    }
+
     // ---- 数据查询 / query ----
 
-    private AnalysisResult query(Dataset dataset, AnalysisPlan plan, String table) {
+    private AnalysisResult query(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
         String agg = plan.getAggregation().getSql();
         List<String> metrics = plan.hasMetrics()
                 ? plan.getMetrics()
@@ -65,7 +86,7 @@ public class AnalysisEngine {
         List<String> selectParts = new ArrayList<>();
         if (plan.hasDimension()) selectParts.add(q(plan.getDimension()) + " AS dimension");
         for (String m : metrics) {
-            selectParts.add(agg + "(" + q(m) + ") AS \"" + m + "_" + agg.toLowerCase() + "\"");
+            selectParts.add(aggExpr(plan, m, formulas, dataset) + " AS \"" + m + "_" + agg.toLowerCase() + "\"");
         }
 
         StringBuilder sql = new StringBuilder("SELECT " + String.join(", ", selectParts) + " FROM " + q(table));
@@ -89,12 +110,11 @@ public class AnalysisEngine {
 
     // ---- 趋势分析 / trend ----
 
-    private AnalysisResult trend(Dataset dataset, AnalysisPlan plan, String table) {
+    private AnalysisResult trend(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
         String timeCol = plan.getTimeColumn() != null ? plan.getTimeColumn() : firstTemporal(dataset);
         if (timeCol == null) throw new IllegalArgumentException("数据集中没有时间列，无法做趋势分析");
 
         TimeGranularity granularity = plan.getTimeGranularity();
-        String agg = plan.getAggregation().getSql();
         List<String> metrics = plan.hasMetrics() ? plan.getMetrics() : List.of(firstNumeric(dataset));
         if (metrics.isEmpty() || metrics.get(0) == null) throw new IllegalArgumentException("数据集中没有数值列，无法做趋势分析");
 
@@ -119,7 +139,7 @@ public class AnalysisEngine {
         List<String> selects = new ArrayList<>();
         selects.add(periodExpr + " AS period");
         if (hasDim) selects.add(q(plan.getDimension()) + " AS dimension");
-        for (String m : metrics) selects.add(agg + "(" + q(m) + ") AS \"" + m + "\"");
+        for (String m : metrics) selects.add(aggExpr(plan, m, formulas, dataset) + " AS \"" + m + "\"");
 
         String sql = "SELECT " + String.join(", ", selects) + " FROM " + q(table)
                 + " WHERE " + baseWhere + " AND " + periodExpr + " IN (" + recentPeriods + ")"
@@ -139,17 +159,37 @@ public class AnalysisEngine {
 
     // ---- 异常识别 / anomaly ----
 
-    private AnalysisResult anomaly(Dataset dataset, AnalysisPlan plan, String table) {
+    private AnalysisResult anomaly(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
         String metric = plan.hasMetrics() ? plan.getMetrics().get(0) : firstNumeric(dataset);
         if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做异常识别");
 
         String groupCol = plan.hasDimension() ? plan.getDimension() : null;
         String where = q(metric) + " IS NOT NULL" + andFilters(plan);
+        // 公式指标：无分组时公式逐行计算（value = 公式行值，item 用行号标识）；
+        // 有分组时按 aggregate-then-compute。/ Formula metric: row-level value without
+        // grouping (item = row number); aggregate-then-compute with grouping.
+        boolean isFormula = formulas.containsKey(metric);
+        Set<String> columns = dataset.getColumns().stream()
+                .map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+        String valueExpr;
+        String itemExpr;
+        if (groupCol == null) {
+            if (isFormula) {
+                valueExpr = FormulaCompiler.compile(formulas.get(metric), formulas::get, columns::contains, null);
+                itemExpr = "CAST(ROW_NUMBER() OVER () AS VARCHAR)";
+            } else {
+                valueExpr = q(metric);
+                itemExpr = "CAST(" + q(metric) + " AS VARCHAR)";
+            }
+        } else {
+            valueExpr = aggExpr(plan, metric, formulas, dataset);
+            itemExpr = "CAST(" + q(groupCol) + " AS VARCHAR)";
+        }
         String sql = groupCol == null
-                ? "SELECT CAST(%s AS VARCHAR) AS item, %s AS value FROM %s WHERE %s"
-                   .formatted(q(metric), q(metric), q(table), where)
-                : "SELECT CAST(%s AS VARCHAR) AS item, %s(%s) AS value FROM %s WHERE %s GROUP BY %s"
-                   .formatted(q(groupCol), plan.getAggregation().getSql(), q(metric), q(table), where, q(groupCol));
+                ? "SELECT %s AS item, %s AS value FROM %s WHERE %s"
+                   .formatted(itemExpr, valueExpr, q(table), where)
+                : "SELECT %s AS item, %s AS value FROM %s WHERE %s GROUP BY %s"
+                   .formatted(itemExpr, valueExpr, q(table), where, q(groupCol));
 
         List<Map<String, Object>> raw = datasetRepo.query(sql, 10000);
         List<Map<String, Object>> anomalies = detectAnomalies(raw);
@@ -304,16 +344,15 @@ public class AnalysisEngine {
 
     // ---- 指标对比 / compare ----
 
-    private AnalysisResult compare(Dataset dataset, AnalysisPlan plan, String table) {
+    private AnalysisResult compare(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
         String dimension = plan.hasDimension() ? plan.getDimension() : firstCategorical(dataset);
         if (dimension == null) throw new IllegalArgumentException("数据集中没有类别列，无法做指标对比");
 
-        String agg = plan.getAggregation().getSql();
         List<String> metrics = plan.hasMetrics() ? plan.getMetrics() : List.of(firstNumericOrOne(dataset));
 
         List<String> selects = new ArrayList<>();
         selects.add(q(dimension) + " AS dimension");
-        for (String m : metrics) selects.add(agg + "(" + q(m) + ") AS \"" + m + "\"");
+        for (String m : metrics) selects.add(aggExpr(plan, m, formulas, dataset) + " AS \"" + m + "\"");
         String sql = "SELECT " + String.join(", ", selects) + " FROM " + q(table)
                 + whereClause(plan) + " GROUP BY " + q(dimension) + compareOrderClause(plan, dimension, metrics);
 

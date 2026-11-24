@@ -130,6 +130,10 @@ public class KnowledgeService {
         String content = req.getContent() == null ? "" : req.getContent();
         String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
 
+        // 公式语法前置校验：坏公式在录入期拒绝，而不是等到分析执行才报 SQL 错。
+        // / Validate formula syntax at ingestion so broken formulas never reach analysis.
+        validateFormula(req.getFormula());
+
         KnowledgeEntry existing = repository.findByHash(hash);
         if (existing != null) {
             log.info("[Knowledge] duplicate content, skip: {}", req.getTitle());
@@ -212,6 +216,7 @@ public class KnowledgeService {
             String content = req.getContent() == null ? "" : req.getContent();
             String hash = sha256((req.getTitle() == null ? "" : req.getTitle()) + "|" + content);
             if (repository.existsByHash(hash)) continue;
+            validateFormula(req.getFormula());
 
             LocalDateTime now = LocalDateTime.now();
             KnowledgeEntry entry = KnowledgeEntry.builder()
@@ -648,5 +653,35 @@ public class KnowledgeService {
             // rather than returning a random UUID, which would silently defeat dedup.
             throw new IllegalStateException("Failed to compute SHA-256 hash", e);
         }
+    }
+
+    /**
+     * 录入期公式语法校验 / Validate formula syntax at ingestion time.
+     *
+     * <p>仅校验语法（不校验字段存在性——字段在执行期结合具体数据集判断）。
+     * / Syntax only; column existence is checked at execution time per dataset.
+     *
+     * @param formula 公式表达式（可空）/ Formula expression (nullable).
+     * @throws IllegalArgumentException 语法错误 / On syntax errors.
+     */
+    private void validateFormula(String formula) {
+        if (formula != null && !formula.isBlank()) {
+            FormulaCompiler.validateSyntax(formula);
+        }
+    }
+
+    /**
+     * 公式注册表（标题 → 表达式），供确定性指标编译 / Formula registry
+     * (title → expression) powering deterministic metric compilation.
+     *
+     * <p>每次分析时即时查询：公式条目数量级小（数十），H2/SQLite 查询
+     * 毫秒级，无需缓存及其失效逻辑。/ Queried per analysis: formula entries are
+     * few (tens at most), the query is sub-millisecond, and skipping the cache
+     * avoids invalidation complexity.
+     *
+     * @return 标题 → 表达式 / title-to-expression mapping.
+     */
+    public java.util.Map<String, String> formulaIndex() {
+        return repository.listFormulas();
     }
 }

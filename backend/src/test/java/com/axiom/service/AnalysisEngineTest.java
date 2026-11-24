@@ -38,13 +38,17 @@ class AnalysisEngineTest {
     @Mock
     private DatasetRepository datasetRepo;
 
+    /** 知识库 mock：提供公式注册表 / Knowledge mock: provides the formula registry. */
+    @Mock
+    private KnowledgeService knowledgeService;
+
     private AnalysisEngine engine;
     private Dataset dataset;
 
     /** 构造被测对象与固定数据集 / Build subject and a fixed dataset. */
     @BeforeEach
     void setUp() {
-        engine = new AnalysisEngine(datasetRepo);
+        engine = new AnalysisEngine(datasetRepo, knowledgeService);
         dataset = new Dataset();
         dataset.setId("ds-1");
         dataset.setTableName("ds_1");
@@ -189,5 +193,53 @@ class AnalysisEngineTest {
         verify(datasetRepo).stats("ds_1", "amount");
         assertThat(result.getRows()).hasSize(1);
         assertThat(result.getRows().get(0)).containsKey("amount");
+    }
+
+    /**
+     * 公式指标：命中知识库公式时按 aggregate-then-compute 编译 SQL，
+     * 数值完全由引擎确定性计算。/ Formula metrics compile deterministically via
+     * aggregate-then-compute when a knowledge formula matches.
+     */
+    @Test
+    @DisplayName("公式指标：query 按公式编译 SQL")
+    void formulaMetricCompiles() {
+        when(knowledgeService.formulaIndex()).thenReturn(Map.of(
+                "毛利", "amount * 2"));
+        when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of(
+                Map.of("dimension", "华东", "毛利_sum", 1000)));
+
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.QUERY);
+        plan.setMetrics(List.of("毛利"));
+        plan.setAggregation(Aggregation.SUM);
+        plan.setDimension("地区");
+
+        engine.execute(dataset, plan);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(datasetRepo).query(sql.capture(), anyInt());
+        // 毛利 → (SUM("销售额") - SUM("成本"))，而非 SUM("毛利")
+        // / The derived metric expands to its formula, never SUM("毛利").
+        assertThat(sql.getValue()).contains("(SUM(\"amount\") * 2) AS \"毛利_sum\"");
+        assertThat(sql.getValue()).doesNotContain("SUM(\"毛利\")");
+    }
+
+    /** 公式循环引用必须在执行期显式报错 / Circular formulas must fail loudly at execution. */
+    @Test
+    @DisplayName("公式循环引用显式报错")
+    void circularFormulaFails() {
+        when(knowledgeService.formulaIndex()).thenReturn(Map.of(
+                "A", "B + 1",
+                "B", "A * 2"));
+
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.QUERY);
+        plan.setMetrics(List.of("A"));
+        plan.setAggregation(Aggregation.SUM);
+
+        AnalysisResult result = engine.execute(dataset, plan);
+        // 引擎的失败短路约定：sql 为 null 且结论携带原因 / Failure contract: sql == null.
+        assertThat(result.getSql()).isNull();
+        assertThat(result.getConclusion()).contains("循环引用");
     }
 }

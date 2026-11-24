@@ -122,9 +122,32 @@ com.axiom.service/
        └─ KnowledgeVectorStore (Zvec knowledge_base_v2)
 ```
 
-字段设计：`kind` 区分类型，`fields/tags` 存 JSON，`datasetId` 为空表示全局，`textHash`（SHA-256）做幂等去重，`formula` 存确定性规则直接执行。`knowledge_entries` 含 `version`（每次更新递增）与 `deleted`（软删除标记）列，删除只标记、查询自动过滤，可恢复。
+字段设计：`kind` 区分类型，`fields/tags` 存 JSON，`datasetId` 为空表示全局，`textHash`（SHA-256）做幂等去重，`formula` 存指标公式（确定性执行，见 3.2）。`knowledge_entries` 含 `version`（每次更新递增）与 `deleted`（软删除标记）列，删除只标记、查询自动过滤，可恢复。
 
-### 3.2 混合检索
+### 3.2 指标公式
+
+`formula` 非空的知识条目构成「确定性指标注册表」：分析时若计划的指标命中某个公式的标题，
+引擎直接把公式编译为 SQL 表达式（`FormulaCompiler`），数值完全由 DuckDB 计算，LLM 不参与
+指标数值的生成。典型场景：`毛利 = 销售额 - 成本`、`毛利率 = (销售额 - 成本) / 销售额 * 100`。
+
+**语法**（递归下降，支持任意括号嵌套）：
+
+- 操作数：数据集字段名（中文列名天然成词）、数字常数（整数/小数）
+- 运算符：`+ - * /`，乘除优先级高于加减
+- 公式引用公式：操作数命中其他公式的标题时递归展开；循环引用报错，深度上限 5 层
+
+**执行语义（aggregate-then-compute）**：公式内每个字段叶节点展开为 `AGG(列)`，运算结构
+保持不变——比率公式在聚合后计算，与财务口径一致（`毛利率 = (SUM(收入)-SUM(成本)) / SUM(收入)`，
+而非行级平均）。除法右侧编译为 `NULLIF(右式, 0)`，分母为 0 得 NULL 而非 Infinity。
+
+**两级校验**：
+
+1. 录入期：`POST /api/knowledge/entry` 与批量入库对 formula 做语法校验，非法公式返回 400，坏公式不入库
+2. 执行期：公式引用的字段必须存在于当前数据集，否则编译失败并显式报错——绝不静默退化为普通聚合后返回错误数字
+
+无分组的异常识别按行级公式计算（叶节点不聚合，异常点以行号标识）。
+
+### 3.3 混合检索
 
 ```
 query → SubQuery1(embedding, HNSW)  ┐
@@ -144,7 +167,7 @@ RRF 在 Zvec native 层完成；Java 层的 Rerank 是召回后的二次精排�
 
 流程：先召回 `candidate-size`（默认 20）条 → rerank → 取 topK。
 
-### 3.3 双写一致性
+### 3.4 双写一致性
 
 元数据（H2）与向量（Zvec）是两次独立写入，Embedding 失败时会出现「元数据有、向量无」。方案是状态机 + outbox + 重建索引：
 
@@ -155,7 +178,7 @@ pending --向量失败--> vector_failed --reindex--> pending --> ready
 
 必须**先写元数据（带 status）再写向量**：即便向量失败也有记录可扫描重建；反过来会留下无从发现的孤儿向量。`GET /api/knowledge/status` 监控，`POST /api/knowledge/reindex?force=` 修复。
 
-### 3.4 检索降级
+### 3.5 检索降级
 
 无 Embedding 时向量检索不可用，降级检索基于 `knowledge_terms` 倒排索引表（命中数即相关性分数，避免全表扫描）：
 
@@ -165,7 +188,7 @@ pending --向量失败--> vector_failed --reindex--> pending --> ready
 
 bigram 与 Zvec 的 jieba FTS 不是重复建设：前者是纯 SQL 降级链路，后者只在 Zvec 可用时生效，构成主链路与降级链路的关系。
 
-### 3.5 与 Agent 的集成点
+### 3.6 与 Agent 的集成点
 
 | 阶段 | 用法 |
 |---|---|

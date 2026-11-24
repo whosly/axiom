@@ -135,6 +135,26 @@ public class KnowledgeRepository {
                 this::mapRow, kind);
     }
 
+    /**
+     * 列出全部已定义公式的条目（标题 → 公式，供确定性计算编译）/ List entries that
+     * define a formula (title → expression) for deterministic metric computation.
+     *
+     * <p>只取轻量列，避免为公式编译拉取全量 content。/ Only lightweight columns are
+     * selected to avoid pulling full content for formula compilation.
+     *
+     * @return title → formula 文本 / title-to-formula mapping.
+     */
+    public java.util.Map<String, String> listFormulas() {
+        return jdbc.query(
+                "SELECT title, formula FROM knowledge_entries "
+                        + "WHERE formula IS NOT NULL AND formula <> '' AND (deleted IS NULL OR deleted = FALSE)",
+                rs -> {
+                    java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+                    while (rs.next()) map.put(rs.getString("title"), rs.getString("formula"));
+                    return map;
+                });
+    }
+
     /** 检查内容哈希是否存在（仅未删除条目，幂等去重）/ Check whether a content hash exists among live entries. */
     public boolean existsByHash(String textHash) {
         if (textHash == null) return false;
