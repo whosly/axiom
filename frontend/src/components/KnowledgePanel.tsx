@@ -53,10 +53,14 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   // 请求序号守卫：并发 refresh（上传后/重建后/手动/切换数据集）只让最新一次生效，
   // 慢的旧响应直接丢弃，避免乱序覆盖。/ Sequence guard: only the latest refresh wins.
   const refreshSeq = useRef(0);
+  // 列表加载失败提示条：失败不能吞成"暂无知识"空态误导用户去录入
+  // / List load-failure banner: failures must surface, not masquerade as an empty list.
+  const [loadError, setLoadError] = useState<string>('');
 
   const refresh = async () => {
     const seq = ++refreshSeq.current;
     setLoading(true);
+    setLoadError('');
     try {
       const entries = (await api.listKnowledge()).entries;
       // 过期响应（已被更新的请求超越）直接丢弃 / Drop stale responses.
@@ -67,7 +71,10 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
       setEntries(entries);
     } catch (e) {
       console.error(e);
-      if (seq === refreshSeq.current) setLoading(false);
+      if (seq === refreshSeq.current) {
+        setLoadError('知识列表加载失败 / Failed to load knowledge: ' + (e as Error).message);
+        setLoading(false);
+      }
       return;
     }
     try {
@@ -104,8 +111,8 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const doReindex = async (force: boolean) => {
     setReindexing(true);
     try {
-      const result = await api.reindexKnowledge(force);
-      notifySuccess('向量重建完成 / Reindex done: ' + JSON.stringify(result));
+      const result = await api.reindexKnowledge(force) as { total?: number; success?: number; failed?: number };
+      notifySuccess(`向量重建完成 / Reindex done：成功 ${result.success ?? 0} / 失败 ${result.failed ?? 0}（共 ${result.total ?? 0}）`);
       await refresh();
     } catch (e) { notifyError('向量重建失败 / Reindex failed: ' + (e as Error).message); }
     finally { setReindexing(false); }
@@ -259,9 +266,15 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
           {/* 知识条目列表 / Entry list */}
           <div>
             <div className="text-sm font-medium mb-3">知识条目 / Knowledge Entries</div>
+            {loadError && (
+              <div className="mb-3 px-3 py-2 rounded text-sm"
+                style={{ background: 'var(--td-error-color-1)', color: 'var(--td-error-color-6)' }}>
+                {loadError}
+              </div>
+            )}
             {loading ? <div className="flex justify-center py-10"><Loading /></div> : (
               <div className="space-y-2">
-                {entries.length === 0 && (
+                {entries.length === 0 && !loadError && (
                   <p className="text-sm text-center py-10" style={{ color: 'var(--td-text-color-placeholder)' }}>
                     暂无知识，点击「录入知识」添加指标口径或业务术语
                   </p>

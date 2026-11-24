@@ -340,7 +340,7 @@ app:
 ### 4.8 已知限制
 
 - `listNodes()/listEdges()` 全表加载后内存过滤，规模受限
-- 前端图谱数据缺少专用 TS 类型，使用 `Record<string, unknown>` + `any`
+- 前端已有专用领域类型（`types.ts` 的 GraphNode/GraphEdge/GraphPayload）与大小写键归一工具，主代码零 `any`
 - 图谱规模持续增大时需重新评估采样策略与算法下沉
 
 ---

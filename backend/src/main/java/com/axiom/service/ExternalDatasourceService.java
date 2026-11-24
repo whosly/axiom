@@ -231,7 +231,20 @@ public class ExternalDatasourceService {
                 try (ResultSet rs = ps.executeQuery()) {
                     ResultSetMetaData md = rs.getMetaData();
                     int cols = md.getColumnCount();
-                    for (int c = 1; c <= cols; c++) headers.add(sanitize(md.getColumnLabel(c)));
+                    // 列名 sanitize 后可能重名（如 SELECT a, a AS "a"）：不去重会让
+                    // row.put 互相覆盖且 headers 数与实际列数错位，与
+                    // DataIngestionService.sanitizeHeaders 的去重行为对齐。
+                    // / Sanitized names can collide; dedupe like DataIngestionService
+                    // or row.put silently overwrites and headers drift out of alignment.
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    for (int c = 1; c <= cols; c++) {
+                        String h = sanitize(md.getColumnLabel(c));
+                        String base = h;
+                        int suffix = 2;
+                        while (seen.contains(h)) h = base + "_" + suffix++;
+                        seen.add(h);
+                        headers.add(h);
+                    }
                     int max = Math.max(1, Math.min(limit, 10000));
                     while (rs.next() && rows.size() < max) {
                         Map<String, Object> row = new LinkedHashMap<>();

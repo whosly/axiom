@@ -68,3 +68,8 @@ logs/
 # / Only Playwright's own generated yaml is ignored; a blanket *.yaml rule would
 # silently skip future CI/deployment manifests.
 .playwright/*.yaml
+
+# vite 配置编译产物与临时文件 / vite config build artifacts
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/vite.config.ts.timestamp-*.mjs

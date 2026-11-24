@@ -154,6 +154,16 @@ public class DataIngestionService {
             case STRING -> cell.getStringCellValue().trim();
             case NUMERIC -> {
                 double v = cell.getNumericCellValue();
+                // Excel 日期在 POI 里也是 NUMERIC（序列号 45000 之类），必须先判断日期格式，
+                // 否则日期列被导入成整数、时间列类型推断失效、趋势分析直接报废。
+                // / Excel dates are NUMERIC cells (serial numbers) in POI; check the date
+                // format first or date columns import as integers and break trend analysis.
+                if (org.apache.poi.ss.usermodel.DateUtil.isCellDateFormatted(cell)) {
+                    java.time.LocalDateTime dt = cell.getLocalDateTimeCellValue();
+                    yield dt.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+                            ? dt.toLocalDate().toString()
+                            : dt.toString();
+                }
                 yield v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v);
             }
             case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());

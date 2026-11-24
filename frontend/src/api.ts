@@ -130,7 +130,7 @@ export const api = {
   // ---- Zvec 数据查看 / Zvec inspection ----
   zvecCollections: () => json<{ collections: ZvecCollection[] }>('/zvec/collections'),
   zvecDocs: (name: string, limit = 50) =>
-    json<{ docs: ZvecDoc[] }>(`/zvec/collections/${name}/docs?limit=${limit}`),
+    json<{ docs: ZvecDoc[]; error?: string }>(`/zvec/collections/${name}/docs?limit=${limit}`),
   zvecDoc: (name: string, id: string) =>
     json<{ doc: Record<string, unknown> }>(`/zvec/collections/${name}/docs/${encodeURIComponent(id)}`),
 

@@ -188,9 +188,13 @@ public class KnowledgeService {
         java.util.List<String> tokens = tokenizer.tokenize(entry.getTitle() + " " + entry.getContent());
         repository.indexTerms(entry.getId(), tokens);
         // 2. 写向量 / Write vector.
-        boolean ok = vectorStore.upsertWithResult(entry);
+        // 空内容永远无法向量化：直接进终态 skipped，避免被 pending 查询无限重试。
+        // / Blank content can never be vectorized: go to terminal 'skipped' instead of
+        // being retried forever by the pending query.
+        boolean blank = entry.getContent() == null || entry.getContent().isBlank();
+        boolean ok = !blank && vectorStore.upsertWithResult(entry);
         // 3. 按结果更新状态 / Update status by result.
-        String finalStatus = ok ? "ready" : "vector_failed";
+        String finalStatus = ok ? "ready" : (blank ? "skipped" : "vector_failed");
         repository.updateStatus(entry.getId(), finalStatus);
         entry.setStatus(finalStatus);
         return ok;
@@ -569,16 +573,33 @@ public class KnowledgeService {
         synchronized (reindexLock) {
             List<KnowledgeEntry> targets = force ? repository.listAll() : repository.listPendingVector();
             int success = 0, failed = 0;
+            // 先集中做元数据侧工作（倒排重建 + 标 pending），再一次性批量写向量：
+            // 逐条 upsert+flush 会让百条重建被刷盘开销支配，与批量导入路径行为一致化。
+            // / Do metadata-side work first (inverted index + pending flag), then one batched
+            // vector write — per-entry upsert+flush would let flush cost dominate a hundred-entry
+            // rebuild, consistent with the batch-import path.
+            List<KnowledgeEntry> valid = new ArrayList<>(targets.size());
             for (KnowledgeEntry e : targets) {
                 // 跳过扫描期间被软删的条目，避免幽灵向量 / Skip entries soft-deleted mid-scan.
                 KnowledgeEntry current = repository.findById(e.getId());
                 if (current == null) continue;
+                // 空内容永远无法向量化：标为终态 skipped，避免被 pending 查询无限捞起重试。
+                // / Blank content can never be vectorized: mark terminal 'skipped' instead of
+                // letting the pending query retry it forever.
+                if (current.getContent() == null || current.getContent().isBlank()) {
+                    repository.updateStatus(e.getId(), "skipped");
+                    continue;
+                }
                 // 重建倒排索引 / Rebuild inverted index.
                 repository.indexTerms(e.getId(), tokenizer.tokenize(current.getTitle() + " " + current.getContent()));
                 // 先标记 pending / Mark as pending first.
                 repository.updateStatus(e.getId(), "pending");
-                boolean ok = vectorStore.upsertWithResult(current);
-                repository.updateStatus(e.getId(), ok ? "ready" : "vector_failed");
+                valid.add(current);
+            }
+            List<Boolean> results = vectorStore.upsertBatch(valid);
+            for (int i = 0; i < valid.size(); i++) {
+                boolean ok = results.get(i);
+                repository.updateStatus(valid.get(i).getId(), ok ? "ready" : "vector_failed");
                 if (ok) success++; else failed++;
             }
             log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);

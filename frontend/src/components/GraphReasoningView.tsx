@@ -31,7 +31,11 @@ export function GraphReasoningView() {
       })));
       const kinds = (g.nodes || []).filter(n => nodeType(n) === 'knowledge');
       if (kinds.length && !entryId) setEntryId(nodeId(kinds[0]));
-    }).catch(e => console.error(e));
+    }).catch(e => {
+      // 下拉为空的原因必须可见，否则用户以为没有图谱数据
+      // / Surface why the dropdown is empty instead of silently showing no options.
+      notifyError('图谱加载失败 / Failed to load graph: ' + (e as Error).message);
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 请求序号守卫：社区发现/路径/关联分析共享 loading，快速切换 tab 或连点时

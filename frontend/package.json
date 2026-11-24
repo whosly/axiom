@@ -10,7 +10,6 @@
     "test:coverage": "node --experimental-test-coverage --import tsx --test src/__tests__/*.test.ts"
   },
   "dependencies": {
-    "@tdesign-react/aigc": "^0.1.0-alpha.1",
     "@tdesign-react/chat": "^1.0.2",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.1.0",

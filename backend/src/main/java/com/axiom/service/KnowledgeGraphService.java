@@ -32,6 +32,7 @@ public class KnowledgeGraphService {
 
     private final KnowledgeGraphRepository graphRepo;
     private final KnowledgeRepository knowledgeRepo;
+    private final org.springframework.transaction.support.TransactionTemplate txTemplate;
 
     /**
      * 从知识条目重建图谱 / Rebuild graph from knowledge entries.
@@ -43,11 +44,18 @@ public class KnowledgeGraphService {
         // / Full rebuild is mutually exclusive with incremental sync: events landing inside
         // a clear() would be erased or produce a half-built graph.
         synchronized (graphLock) {
-            graphRepo.clear();
-            for (KnowledgeEntry e : knowledgeRepo.listAll()) {
-                buildEntryGraph(e);
-            }
-            graphRepo.bumpVersion();
+            // clear + 逐条写入 + bumpVersion 包在一个事务里：中途失败整体回滚，
+            // 不会留下被清空的半图，版本号也不前进（快照缓存保持一致）。
+            // / clear + per-entry writes + bumpVersion run in one transaction: a mid-way
+            // failure rolls back instead of leaving a half-built graph, and the version
+            // stays put so the snapshot cache remains consistent.
+            txTemplate.executeWithoutResult(status -> {
+                graphRepo.clear();
+                for (KnowledgeEntry e : knowledgeRepo.listAll()) {
+                    buildEntryGraph(e);
+                }
+                graphRepo.bumpVersion();
+            });
         }
         Map<String, Object> stats = graphRepo.stats();
         log.info("[KnowledgeGraph] rebuilt: {}", stats);

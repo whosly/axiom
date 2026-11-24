@@ -14,7 +14,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 数据集语义向量服务 / Dataset-semantics vector service.
@@ -60,37 +62,47 @@ public class VectorService {
             Path dir = Path.of(props.getZvec().getPath());
 
             // Zvec.initialize() 已由 ZvecLifecycle 调用，此处不再重复 / Already initialized by ZvecLifecycle.
+            // schema 本体也持 native 内存：open/create 失败的异常路径同样要释放，
+            // 否则 init 失败降级时泄漏。/ The schema itself holds native memory and must be
+            // released even when open/create throws on the degraded path.
             CollectionSchema schema = new CollectionSchema(props.getZvec().getCollection());
-            // vectorField 也必须 close：FieldSchema 持有 native 资源，旁边的字段都用了
-            // try-with-resources，这里漏掉属于笔误级泄漏。/ vectorField holds native memory
-            // too; the surrounding fields all use try-with-resources, this one was a leak.
-            try (FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
-                    props.getZvec().getDimension())) {
-                try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
-                    vectorField.setIndexParams(hnsw);
+            try {
+                // vectorField 也必须 close：FieldSchema 持有 native 资源，旁边的字段都用了
+                // try-with-resources，这里漏掉属于笔误级泄漏。/ vectorField holds native memory
+                // too; the surrounding fields all use try-with-resources, this one was a leak.
+                try (FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
+                        props.getZvec().getDimension())) {
+                    try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
+                        vectorField.setIndexParams(hnsw);
+                    }
+                    schema.addField(vectorField);
                 }
-                schema.addField(vectorField);
-            }
 
-            try (FieldSchema textField = new FieldSchema("text", DataType.STRING, true, 0)) {
-                schema.addField(textField);
-            }
-            try (FieldSchema kindField = new FieldSchema("kind", DataType.STRING, true, 0)) {
-                schema.addField(kindField);
-            }
-            try (FieldSchema refField = new FieldSchema("refId", DataType.STRING, true, 0)) {
-                schema.addField(refField);
-            }
+                try (FieldSchema textField = new FieldSchema("text", DataType.STRING, true, 0)) {
+                    schema.addField(textField);
+                }
+                try (FieldSchema kindField = new FieldSchema("kind", DataType.STRING, true, 0)) {
+                    schema.addField(kindField);
+                }
+                try (FieldSchema refField = new FieldSchema("refId", DataType.STRING, true, 0)) {
+                    schema.addField(refField);
+                }
 
-            if (Files.exists(dir)) {
-                collection = Zvec.open(dir.toString(), null);
-                log.info("[Zvec] opened existing collection at {}", dir.toAbsolutePath());
-            } else {
-                collection = Zvec.createAndOpen(dir.toString(), schema, null);
-                log.info("[Zvec] created collection at {}", dir.toAbsolutePath());
+                if (Files.exists(dir)) {
+                    collection = Zvec.open(dir.toString(), null);
+                    log.info("[Zvec] opened existing collection at {}", dir.toAbsolutePath());
+                } else {
+                    collection = Zvec.createAndOpen(dir.toString(), schema, null);
+                    log.info("[Zvec] created collection at {}", dir.toAbsolutePath());
+                }
+                ready = true;
+            } finally {
+                try {
+                    schema.close();
+                } catch (Exception ce) {
+                    log.warn("[Zvec] schema close failed: {}", ce.getMessage());
+                }
             }
-            schema.close();
-            ready = true;
             log.info("[Zvec] initialized at {}", dir.toAbsolutePath());
         } catch (Throwable t) {
             log.warn("[Zvec] initialization failed, vector features will be degraded: {}", t.getMessage());
@@ -119,6 +131,91 @@ public class VectorService {
      * 调用方只读，不应写入 / Callers must treat it as read-only.
      */
     public Collection rawCollection() { return collection; }
+
+    /**
+     * 在串行锁内执行 collection 检视操作 / Run a collection inspection under the serial lock.
+     *
+     * <p>Inspector 的 native 调用（stats/iterator/fetch）同样必须与写入/flush 串行化，
+     * 否则与并发的 upsert/flush 相撞可能在 native 层崩溃。绕过本方法直接调
+     * {@link #rawCollection()} 违反串行化纪律。
+     * / Inspector's native calls (stats/iterator/fetch) must also be serialized with
+     * writes/flushes — racing with concurrent upsert/flush can crash the native layer.
+     */
+    public <T> T inspect(java.util.function.Supplier<T> action) {
+        synchronized (zvecLock) {
+            return action.get();
+        }
+    }
+
+    /**
+     * 查询向量 LRU 缓存：同一问题文本在 field/history 等多次检索与跨阶段调用中
+     * 复用同一次 embedding，避免一次分析对同一问题重复调 3-4 次 embedding API
+     * （本地模式则是 4 次 ONNX 推理）。key 带厂商前缀，热切换模型后旧缓存自然失效。
+     * 只缓存检索查询，不缓存 upsert 内容（内容唯一且体积大，缓存只会白白占内存）。
+     * / Query-vector LRU cache: one analysis re-embeds the same question 3-4 times
+     * across field/history/kb lookups. Keys are provider-prefixed so a hot provider
+     * switch invalidates naturally. Search queries only — upsert contents are unique
+     * and bulky, caching them would waste memory.
+     */
+    private final Map<String, float[]> queryVectorCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, float[]> eldest) {
+                    return size() > 128;
+                }
+            });
+
+    /** 带缓存的查询向量 / Cached query embedding. */
+    private float[] embedCached(String text) {
+        String key = embeddingFactory.current().providerName() + "::" + text;
+        float[] cached = queryVectorCache.get(key);
+        if (cached != null) return cached;
+        // embed 在缓存锁外执行，慢请求不阻塞其他检索 / Embed outside the map lock so a
+        // slow request does not stall other lookups.
+        float[] vector = alignDimension(embeddingFactory.current().embed(text));
+        queryVectorCache.put(key, vector);
+        return vector;
+    }
+
+    /** 批量写入的语义条目 / Semantic item for batched writes. */
+    public record SemanticItem(String id, String kind, String refId, String text) {
+    }
+
+    /**
+     * 批量写入语义向量 / Batch upsert semantic items.
+     *
+     * <p>锁外逐条 embed + 构建 Doc，锁内一次 upsert + 一次 flush：字段语义索引、
+     * 历史沉淀等 N 条写入只付一次刷盘代价，与 KnowledgeVectorStore.upsertBatch
+     * 的设计一致。单条失败只跳过该条。
+     * / Embed + build docs outside the lock, one upsert + one flush inside: N writes
+     * pay one flush cost, matching KnowledgeVectorStore.upsertBatch. A failing item
+     * is skipped without poisoning the rest.
+     */
+    public void upsertAll(List<SemanticItem> items) {
+        if (!ready || items == null || items.isEmpty()) return;
+        List<Doc> docs = new ArrayList<>(items.size());
+        try {
+            for (SemanticItem item : items) {
+                if (item.text() == null || item.text().isBlank()) continue;
+                Doc doc = new Doc();
+                doc.setPK(item.id());
+                doc.addStringField("text", item.text());
+                doc.addStringField("kind", item.kind());
+                doc.addStringField("refId", item.refId());
+                doc.addVectorFP32Field("embedding", alignDimension(embeddingFactory.current().embed(item.text())));
+                docs.add(doc);
+            }
+            if (docs.isEmpty()) return;
+            synchronized (zvecLock) {
+                collection.upsert(docs);
+                collection.flush();
+            }
+        } catch (Exception e) {
+            log.warn("[Zvec] batch upsert failed ({} items): {}", docs.size(), e.getMessage());
+        } finally {
+            if (!docs.isEmpty()) Doc.freeDocs(docs);
+        }
+    }
 
     /** Upsert a piece of semantic text into the vector store. */
     public void upsert(String id, String kind, String refId, String text) {
@@ -162,7 +259,7 @@ public class VectorService {
     public List<Hit> search(String query, String kindFilter, int topK) {
         if (!ready) return Collections.emptyList();
         try {
-            float[] vector = alignDimension(embeddingFactory.current().embed(query));
+            float[] vector = embedCached(query);
 
             try (VectorQuery vq = new VectorQuery()) {
                 vq.setTopK(topK);

@@ -79,7 +79,13 @@ public class LlmConfigService {
         // 其余字段写入「当前厂商」配置 / Remaining fields go to the active vendor's config.
         String active = props.getLlm().getProvider();
         LlmProviderConfig cfg = props.getLlm().config(active);
-        if (body.containsKey("apiKey")) cfg.setApiKey(body.get("apiKey"));
+        // apiKey 与其他字段一致：空白视为「未修改」。配置面板提交时未输入 key 的空串
+        // 若直接写入会静默清掉现有密钥，导致 llmAvailable 变 false 全链路降级。
+        // 需要显式清除密钥时走配置文件编辑，不用空串覆盖。
+        // / apiKey follows the other fields: blank means "unchanged". A blank submit
+        // from the config panel must not silently wipe the existing key and degrade
+        // the whole pipeline; explicit removal goes through the config file.
+        if (body.containsKey("apiKey") && !body.get("apiKey").isBlank()) cfg.setApiKey(body.get("apiKey"));
         if (body.containsKey("baseUrl") && !body.get("baseUrl").isBlank()) cfg.setBaseUrl(body.get("baseUrl"));
         if (body.containsKey("chatModel") && !body.get("chatModel").isBlank()) cfg.setChatModel(body.get("chatModel"));
         if (body.containsKey("reasonerModel") && !body.get("reasonerModel").isBlank())

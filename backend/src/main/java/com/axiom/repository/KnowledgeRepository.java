@@ -229,6 +229,9 @@ public class KnowledgeRepository {
      * / These are entries with metadata persisted but vector write failed; for background retry.
      */
     public List<KnowledgeEntry> listPendingVector() {
+        // 'skipped' 为终态：空内容条目永远无法向量化，进入该状态后不再被反复捞起重试。
+        // / 'skipped' is terminal: blank-content entries can never be vectorized and must
+        // not be picked up for retry forever.
         return jdbc.query(
                 "SELECT * FROM knowledge_entries WHERE status IN ('pending','vector_failed') ORDER BY updated_at ASC",
                 this::mapRow);

@@ -35,7 +35,18 @@ class KnowledgeGraphSyncTest {
     /** 构造被测服务 / Build the service under test. */
     @BeforeEach
     void setUp() {
-        service = new KnowledgeGraphService(graphRepo, knowledgeRepo);
+        // 测试只覆盖增量路径：事务管理器用 mock，回调直通执行 / Incremental-path tests:
+        // mocked transaction manager, callback runs straight through.
+        org.springframework.transaction.PlatformTransactionManager tm =
+                org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+        // 增量路径不会开启事务：lenient 避免严格模式的 UnnecessaryStubbing
+        // / Incremental paths never open a transaction: lenient avoids UnnecessaryStubbing.
+        org.mockito.Mockito.lenient()
+                .when(tm.getTransaction(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+        org.springframework.transaction.support.TransactionTemplate tx =
+                new org.springframework.transaction.support.TransactionTemplate(tm);
+        service = new KnowledgeGraphService(graphRepo, knowledgeRepo, tx);
     }
 
     /** 构造一条知识 / Build a knowledge entry. */

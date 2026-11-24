@@ -148,23 +148,41 @@ public class KnowledgeGraphRepository {
      * @param hops    跳数 / Number of hops.
      * @return 可达节点 ID 集合 / Set of reachable node IDs.
      */
+    /** IN 子句单批参数上限：SQLite 绑定参数上限 999，分批防超限 / IN-clause chunk cap (SQLite binds max 999 params). */
+    private static final int IN_CHUNK = 400;
+
     public Set<String> neighbors(String startId, int hops) {
         Set<String> visited = new LinkedHashSet<>();
         visited.add(startId);
         List<String> frontier = new ArrayList<>();
         frontier.add(startId);
         for (int h = 0; h < Math.max(0, hops); h++) {
-            List<String> next = new ArrayList<>();
-            for (String node : frontier) {
-                List<String> outs = jdbc.queryForList(
-                        "SELECT target FROM kg_edges WHERE source = ?", String.class, node);
-                List<String> ins = jdbc.queryForList(
-                        "SELECT source FROM kg_edges WHERE target = ?", String.class, node);
-                for (String n : outs) if (visited.add(n)) next.add(n);
-                for (String n : ins) if (visited.add(n)) next.add(n);
-            }
-            frontier = next;
             if (frontier.isEmpty()) break;
+            // 整层一次批量查询替代逐节点 2 条 SQL 的 N+1 模式；
+            // IN 参数按 400 分批，避免 SQLite 的 999 绑定上限。
+            // / One batched query per BFS level instead of 2 SQLs per node (N+1);
+            // IN args chunked by 400 to stay under SQLite's 999-bind limit.
+            Set<String> next = new LinkedHashSet<>();
+            for (int from = 0; from < frontier.size(); from += IN_CHUNK) {
+                List<String> chunk = frontier.subList(from, Math.min(from + IN_CHUNK, frontier.size()));
+                String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+                Object[] args = new Object[chunk.size() * 2];
+                System.arraycopy(chunk.toArray(), 0, args, 0, chunk.size());
+                System.arraycopy(chunk.toArray(), 0, args, chunk.size(), chunk.size());
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT source, target FROM kg_edges WHERE source IN (" + placeholders + ")"
+                                + " OR target IN (" + placeholders + ")", args);
+                for (Map<String, Object> row : rows) {
+                    String src = String.valueOf(row.get("source"));
+                    String tgt = String.valueOf(row.get("target"));
+                    if (src.equals(tgt)) continue;
+                    // 只把「已访问一侧的另一端」加入下一层，避免同一层的边互拉
+                    // / Only pull the far end of an edge whose near end is already visited.
+                    if (visited.contains(src) && visited.add(tgt)) next.add(tgt);
+                    else if (visited.contains(tgt) && visited.add(src)) next.add(src);
+                }
+            }
+            frontier = new ArrayList<>(next);
         }
         return visited;
     }

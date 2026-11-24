@@ -91,12 +91,14 @@ do_restore() {
       local file_dir="$(cd "$(dirname "$file")" && pwd)"
       local file_name="$(basename "$file")"
       docker run --rm -v "$vol:/data" -v "$file_dir:/backup:ro" -e BAK_FILE="$file_name" \
-        alpine:3.20 sh -c 'rm -rf /data/* && tar xzf "/backup/$BAK_FILE" -C /data' \
+        alpine:3.20 sh -c 'find /data -mindepth 1 -delete && tar xzf "/backup/$BAK_FILE" -C /data' \
         || { err "恢复失败 / Restore failed"; exit 1; }
       ;;
     local:*)
       local dir="${src#local:}"
-      rm -rf "${dir:?}"/* && tar xzf "$file" -C "$dir" || { err "恢复失败 / Restore failed"; exit 1; }
+      # find -delete 覆盖 rm -rf dir/* 漏掉的点文件，恢复前彻底清空目标
+      # / find -delete also removes dotfiles that rm -rf dir/* would miss.
+      find "${dir:?}" -mindepth 1 -delete && tar xzf "$file" -C "$dir" || { err "恢复失败 / Restore failed"; exit 1; }
       ;;
   esac
   info "恢复完成 / Restored from: $file"

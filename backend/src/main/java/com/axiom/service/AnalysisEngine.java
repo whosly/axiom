@@ -100,9 +100,12 @@ public class AnalysisEngine {
         List<Map<String, Object>> rows = datasetRepo.query(sql.toString(), plan.getLimit());
         AnalysisResult result = base(plan, rows, sql.toString());
 
-        String xField = plan.hasDimension() ? "dimension" : metrics.get(0);
+        // 无 dimension 时行键是聚合别名（如 "订单数_sum"），xField 必须同样取别名，
+        // 否则前端图表取不到 x 值。/ Without a dimension the row keys are aggregation
+        // aliases; xField must use the alias too or the chart loses its x values.
         String yField = !rows.isEmpty() ? rows.get(0).keySet().stream()
                 .filter(k -> !k.equals("dimension")).findFirst().orElse(metrics.get(0)) : metrics.get(0);
+        String xField = plan.hasDimension() ? "dimension" : yField;
         ChartType chart = plan.getChartType() == ChartType.TABLE ? ChartType.BAR : plan.getChartType();
         result.setChart(new ChartSpec(chart.getValue(), xField, List.of(yField), plan.getTitle(), rows));
         return result;
@@ -164,13 +167,19 @@ public class AnalysisEngine {
         if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做异常识别");
 
         String groupCol = plan.hasDimension() ? plan.getDimension() : null;
-        String where = q(metric) + " IS NOT NULL" + andFilters(plan);
         // 公式指标：无分组时公式逐行计算（value = 公式行值，item 用行号标识）；
         // 有分组时按 aggregate-then-compute。/ Formula metric: row-level value without
         // grouping (item = row number); aggregate-then-compute with grouping.
         boolean isFormula = formulas.containsKey(metric);
         Set<String> columns = dataset.getColumns().stream()
                 .map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+        // 公式指标没有同名物理列，q(metric) IS NOT NULL 会引用不存在的列导致 SQL 必然失败；
+        // 用 1=1 占位保持 WHERE 模板成立。行级公式为 NULL 的行会被 detectAnomalies 的
+        // Number 守卫跳过，聚合公式由 SQL 聚合的 NULL 语义兜底。
+        // / A formula metric has no physical column, so q(metric) IS NOT NULL would always
+        // fail. Use 1=1 to keep the WHERE template valid; row-level NULLs are skipped by
+        // detectAnomalies' Number guard, aggregate formulas rely on SQL NULL semantics.
+        String where = (isFormula ? "1=1" : q(metric) + " IS NOT NULL") + andFilters(plan);
         String valueExpr;
         String itemExpr;
         if (groupCol == null) {
@@ -384,6 +393,15 @@ public class AnalysisEngine {
 
     private AnalysisResult summary(Dataset dataset, AnalysisPlan plan, String table) {
         List<String> numeric = allNumeric(dataset);
+        AnalysisResult result = base(plan, new ArrayList<>(), "-- descriptive statistics");
+        List<String> insights = new ArrayList<>();
+        insights.add(String.format("数据集共 %d 行、%d 列", dataset.getRowCount(), dataset.getColumnCount()));
+        if (numeric.isEmpty()) {
+            // 无数值列时给出行/列概览即可，不再对不存在的列做统计。
+            // / No numeric columns: report row/column overview only.
+            result.setInsights(insights);
+            return result;
+        }
         Map<String, Object> stats = new LinkedHashMap<>();
         for (String col : numeric.subList(0, Math.min(5, numeric.size()))) {
             stats.put(col, datasetRepo.stats(table, col));
@@ -391,7 +409,6 @@ public class AnalysisEngine {
         List<Map<String, Object>> rows = new ArrayList<>();
         rows.add(stats);
 
-        AnalysisResult result = base(plan, rows, "-- descriptive statistics");
         // 图表列范围必须与 stats 统计范围一致，否则超出部分的列会画出高度为 0 的假柱子。
         // The chart must cover exactly the same columns as stats, or extra columns render as zero bars.
         List<String> charted = numeric.subList(0, Math.min(5, numeric.size()));
@@ -403,10 +420,9 @@ public class AnalysisEngine {
             row.put("avg", stat instanceof Map<?, ?> sm ? sm.get("avg") : 0);
             chartRows.add(row);
         }
+        result.setRows(rows);
         result.setChart(new ChartSpec(ChartType.BAR.getValue(), "metric", List.of("avg"), "数值指标均值", chartRows));
 
-        List<String> insights = new ArrayList<>();
-        insights.add(String.format("数据集共 %d 行、%d 列", dataset.getRowCount(), dataset.getColumnCount()));
         for (String col : numeric.subList(0, Math.min(3, numeric.size()))) {
             Map<?, ?> s = (Map<?, ?>) stats.get(col);
             insights.add(String.format("%s：均值 %.2f，最小 %.2f，最大 %.2f",
@@ -528,13 +544,17 @@ public class AnalysisEngine {
 
     private String firstNumericOrOne(Dataset d) {
         String c = firstNumeric(d);
-        return c == null ? "1" : c;
+        // 无数值列时显式报错而非回退到不存在的 "1" 列——那会让 COUNT("1") 在
+        // DuckDB 报列不存在，变成晦涩的执行失败。
+        // / Fail loudly instead of falling back to a non-existent "1" column,
+        // which turns into an obscure COUNT("1") column-not-found error.
+        if (c == null) throw new IllegalArgumentException("数据集中没有数值列，无法聚合分析");
+        return c;
     }
 
     private List<String> allNumeric(Dataset d) {
-        List<String> list = d.getColumns().stream().filter(c -> "numeric".equals(c.getType()))
+        return d.getColumns().stream().filter(c -> "numeric".equals(c.getType()))
                 .map(ColumnInfo::getName).toList();
-        return list.isEmpty() ? List.of("1") : list;
     }
 
     private double num(Object o) { return o instanceof Number n ? n.doubleValue() : 0; }

@@ -242,4 +242,57 @@ class AnalysisEngineTest {
         assertThat(result.getSql()).isNull();
         assertThat(result.getConclusion()).contains("循环引用");
     }
+
+    /**
+     * anomaly + 公式指标：WHERE 不能引用公式标题（该列不存在），
+     * 必须以 1=1 占位 / anomaly with a formula metric must not null-check the
+     * formula title as if it were a physical column.
+     */
+    @Test
+    @DisplayName("公式指标：anomaly 的 WHERE 不引用公式标题列")
+    void anomalyFormulaSkipsTitleNullCheck() {
+        when(knowledgeService.formulaIndex()).thenReturn(Map.of(
+                "毛利", "amount * 2"));
+        when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of(
+                Map.of("item", "华东", "value", 1000)));
+
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.ANOMALY);
+        plan.setMetrics(List.of("毛利"));
+        plan.setAggregation(Aggregation.SUM);
+        plan.setDimension("region");
+
+        engine.execute(dataset, plan);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(datasetRepo).query(sql.capture(), anyInt());
+        // 修复前生成 WHERE "毛利" IS NOT NULL —— 公式标题不是物理列，SQL 必然失败
+        // / Before the fix this generated WHERE "毛利" IS NOT NULL — a non-existent column.
+        assertThat(sql.getValue()).doesNotContain("\"毛利\" IS NOT NULL");
+        assertThat(sql.getValue()).contains("(SUM(\"amount\") * 2) AS value");
+        assertThat(sql.getValue()).contains("GROUP BY");
+    }
+
+    /** anomaly 无分组 + 公式：行级计算路径 / anomaly row-level formula without grouping. */
+    @Test
+    @DisplayName("公式指标：anomaly 行级路径不引用公式标题列")
+    void anomalyRowLevelFormulaSkipsTitleNullCheck() {
+        when(knowledgeService.formulaIndex()).thenReturn(Map.of(
+                "毛利", "amount * 2"));
+        when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of(
+                Map.of("item", "1", "value", 100)));
+
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.ANOMALY);
+        plan.setMetrics(List.of("毛利"));
+        plan.setAggregation(Aggregation.SUM);
+
+        engine.execute(dataset, plan);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(datasetRepo).query(sql.capture(), anyInt());
+        assertThat(sql.getValue()).doesNotContain("\"毛利\" IS NOT NULL");
+        // 行级公式叶节点输出裸列 / Row-level formula leaves emit bare columns.
+        assertThat(sql.getValue()).contains("(\"amount\" * 2) AS value");
+    }
 }

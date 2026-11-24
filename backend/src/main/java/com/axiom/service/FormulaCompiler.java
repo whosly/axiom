@@ -26,8 +26,13 @@ import java.util.function.Predicate;
  */
 public final class FormulaCompiler {
 
-    private static final int MAX_FORMULA_DEPTH = 5;
-    private static final int MAX_EMIT_DEPTH = 32;
+    /** 括号嵌套解析上限：防止对抗性深嵌套触发 StackOverflowError（Error 逃过 execute 的 catch）。
+     * / Paren-nesting parse cap: adversarial deep nesting would throw StackOverflowError,
+     * an Error that escapes execute()'s catch. */
+    private static final int MAX_PARSE_DEPTH = 64;
+
+    /** 公式引用展开链上限 / Formula reference expansion chain cap. */
+    private static final int MAX_FORMULA_CHAIN = 32;
 
     private FormulaCompiler() {
     }
@@ -85,7 +90,7 @@ public final class FormulaCompiler {
             throw new IllegalArgumentException("公式不能为空 / Formula is empty");
         }
         Deque<Token> tokens = tokenize(expression);
-        ParserState st = new ParserState(tokens);
+        ParserState st = new ParserState(tokens, expression);
         Node node = parseExpr(st);
         if (st.hasNext()) {
             throw fail(expression, st.peek().pos(), "存在无法解析的多余内容 / trailing input");
@@ -101,9 +106,24 @@ public final class FormulaCompiler {
     /** 递归下降状态 / Recursive-descent parser state. */
     private static final class ParserState {
         private final Deque<Token> tokens;
+        private final String expr;
+        private int depth = 0;
 
-        ParserState(Deque<Token> tokens) {
+        ParserState(Deque<Token> tokens, String expr) {
             this.tokens = tokens;
+            this.expr = expr;
+        }
+
+        /** 进入括号嵌套并检查深度 / Enter a paren level and enforce the depth cap. */
+        void enterParen() {
+            if (++depth > MAX_PARSE_DEPTH) {
+                throw fail(expr, -1, "括号嵌套过深（上限 " + MAX_PARSE_DEPTH + " 层）"
+                        + " / parenthesis nesting too deep (max " + MAX_PARSE_DEPTH + ")");
+            }
+        }
+
+        void exitParen() {
+            depth--;
         }
 
         boolean hasNext() {
@@ -143,11 +163,13 @@ public final class FormulaCompiler {
         }
         Token t = st.next();
         if (t.isOp('(')) {
+            st.enterParen();
             Node inner = parseExpr(st);
             if (!st.hasNext() || !st.peek().isOp(')')) {
                 throw new IllegalArgumentException("括号不匹配 / Unbalanced parenthesis");
             }
             st.next();
+            st.exitParen();
             return inner;
         }
         if (t.isOp('-')) {
@@ -157,6 +179,14 @@ public final class FormulaCompiler {
             return parseFactor(st);
         }
         if (t.number() != null) return new Num(t.number());
+        // 运算符/右括号在此处属于语法错误，不能兜底当字段引用——否则「销售额 * * 成本」
+        // 会报误导性的"未知字段「*」"，极端情况下列名恰好撞上会静默编译出错误 SQL。
+        // / Operators and ')' are syntax errors here — falling back to FieldRef would
+        // report a misleading "unknown column *" (or worse, silently compile wrong SQL
+        // if a column name collides).
+        if (t.isOp('*', '/', ')')) {
+            throw fail(st.expr, t.pos(), "意外的运算符「" + t.op() + "」/ unexpected operator");
+        }
         return new FieldRef(t.text());
     }
 
@@ -218,27 +248,30 @@ public final class FormulaCompiler {
 
     private static void emit(Node node, StringBuilder sql, Deque<String> expanding,
                              Function<String, String> formulaLookup,
-                             Predicate<String> columnExists, String aggSql, int depth) {
-        if (depth > MAX_EMIT_DEPTH) {
-            throw new IllegalArgumentException("公式嵌套过深 / Formula nesting too deep");
-        }
+                             Predicate<String> columnExists, String aggSql, int formulaChain) {
         // Java 17 无 record pattern，用 instanceof + record 访问器 / Java 17 lacks record
         // patterns; use instanceof with record accessors.
         if (node instanceof Num n) {
             sql.append(formatNumber(n.value()));
         } else if (node instanceof FieldRef f) {
-            emitRef(f.name(), sql, expanding, formulaLookup, columnExists, aggSql, depth);
+            emitRef(f.name(), sql, expanding, formulaLookup, columnExists, aggSql, formulaChain);
         } else if (node instanceof Op o) {
             sql.append('(');
-            emit(o.left(), sql, expanding, formulaLookup, columnExists, aggSql, depth + 1);
+            // 深度只随公式引用展开增长，不随运算节点增长：左结合链 a+b+c+... 是合法的
+            // 财务公式，按 Op 计深会把 33 项加总误判为"嵌套过深"。运算树深度已由解析期
+            // 的括号上限（MAX_PARSE_DEPTH）兜底。
+            // / Depth grows only through formula expansion, not per Op node: left-associative
+            // chains are legitimate financial formulas. Operator-tree depth is already bounded
+            // by the parse-time paren cap.
+            emit(o.left(), sql, expanding, formulaLookup, columnExists, aggSql, formulaChain);
             if (o.op() == '/') {
                 // 除零防护：右侧包 NULLIF / Zero-denominator guard via NULLIF.
                 sql.append(" / NULLIF(");
-                emit(o.right(), sql, expanding, formulaLookup, columnExists, aggSql, depth + 1);
+                emit(o.right(), sql, expanding, formulaLookup, columnExists, aggSql, formulaChain);
                 sql.append(", 0))");
             } else {
                 sql.append(' ').append(o.op()).append(' ');
-                emit(o.right(), sql, expanding, formulaLookup, columnExists, aggSql, depth + 1);
+                emit(o.right(), sql, expanding, formulaLookup, columnExists, aggSql, formulaChain);
                 sql.append(')');
             }
         }
@@ -250,15 +283,19 @@ public final class FormulaCompiler {
      */
     private static void emitRef(String name, StringBuilder sql, Deque<String> expanding,
                                 Function<String, String> formulaLookup,
-                                Predicate<String> columnExists, String aggSql, int depth) {
+                                Predicate<String> columnExists, String aggSql, int formulaChain) {
         String referenced = formulaLookup.apply(name);
         if (referenced != null) {
             if (expanding.contains(name)) {
                 throw new IllegalArgumentException("公式循环引用 / Circular formula reference: " + name);
             }
+            if (formulaChain + 1 > MAX_FORMULA_CHAIN) {
+                throw new IllegalArgumentException("公式引用链过长（上限 " + MAX_FORMULA_CHAIN + " 层）"
+                        + " / Formula reference chain too deep (max " + MAX_FORMULA_CHAIN + ")");
+            }
             expanding.push(name);
             Node ast = parse(referenced);
-            emit(ast, sql, expanding, formulaLookup, columnExists, aggSql, depth + 1);
+            emit(ast, sql, expanding, formulaLookup, columnExists, aggSql, formulaChain + 1);
             expanding.pop();
             return;
         }
@@ -280,9 +317,14 @@ public final class FormulaCompiler {
         return '"' + name.replace("\"", "\"\"") + '"';
     }
 
-    /** 数字常量格式化（整数不带小数点）/ Format a numeric constant. */
+    /** 数字常量格式化：整数不带小数点；超出 long 范围时保留双精度字面量避免截断。
+     * / Format a numeric constant: integral values without a decimal point; values
+     * beyond long range keep their double literal to avoid saturation. */
     private static String formatNumber(double v) {
-        if (v == Math.rint(v) && !Double.isInfinite(v)) return String.valueOf((long) v);
+        if (v == Math.rint(v) && !Double.isInfinite(v) && !Double.isNaN(v)) {
+            long lv = (long) v;
+            if ((double) lv == v) return String.valueOf(lv);
+        }
         return String.valueOf(v);
     }
 }

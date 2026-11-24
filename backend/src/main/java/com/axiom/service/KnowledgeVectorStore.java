@@ -13,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 知识库向量存储 / Knowledge-base vector store.
@@ -81,20 +83,28 @@ public class KnowledgeVectorStore {
         try {
             Path dir = Path.of(props.getZvec().getKnowledgePath());
             CollectionSchema schema = buildSchema();
-
-            if (Files.exists(dir)) {
-                // 重启时目录已存在，只能用 open / On restart the dir exists, so open it.
-                collection = Zvec.open(dir.toString(), null);
-                log.info("[KnowledgeVector] opened existing collection at {}", dir.toAbsolutePath());
-            } else {
-                collection = Zvec.createAndOpen(dir.toString(), schema, null);
-                // 新建 collection 没有历史向量，标记启动后全量重建 / New collection is empty; flag a full reindex.
-                needsFullReindex = true;
-                log.info("[KnowledgeVector] created collection at {} (full reindex will follow)",
-                        dir.toAbsolutePath());
+            // schema 本体也持 native 内存：open 失败的异常路径同样要释放。
+            // / The schema itself holds native memory and must be released when open throws.
+            try {
+                if (Files.exists(dir)) {
+                    // 重启时目录已存在，只能用 open / On restart the dir exists, so open it.
+                    collection = Zvec.open(dir.toString(), null);
+                    log.info("[KnowledgeVector] opened existing collection at {}", dir.toAbsolutePath());
+                } else {
+                    collection = Zvec.createAndOpen(dir.toString(), schema, null);
+                    // 新建 collection 没有历史向量，标记启动后全量重建 / New collection is empty; flag a full reindex.
+                    needsFullReindex = true;
+                    log.info("[KnowledgeVector] created collection at {} (full reindex will follow)",
+                            dir.toAbsolutePath());
+                }
+                ready = true;
+            } finally {
+                try {
+                    schema.close();
+                } catch (Exception ce) {
+                    log.warn("[KnowledgeVector] schema close failed: {}", ce.getMessage());
+                }
             }
-            schema.close();
-            ready = true;
         } catch (Throwable t) {
             // 向量检索失败不应阻断主流程，降级为元数据检索 / Vector failure must not block main flow.
             log.warn("[KnowledgeVector] init failed, vector search degraded: {}", t.getMessage());
@@ -260,6 +270,34 @@ public class KnowledgeVectorStore {
     }
 
     /**
+     * 查询向量 LRU 缓存：plan 与 conclude 阶段对同一问题各调一次 kb 检索，
+     * 复用同一次 embedding。key 带厂商前缀，热切换模型后旧缓存自然失效。
+     * 只缓存检索查询，不缓存写入内容（内容唯一且体积大）。
+     * / Query-vector LRU cache: plan and conclude each hit kb retrieval with the same
+     * question, so they share one embedding. Provider-prefixed keys invalidate on hot
+     * provider switch. Search queries only — written contents are unique and bulky.
+     */
+    private final Map<String, float[]> queryVectorCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, float[]> eldest) {
+                    return size() > 128;
+                }
+            });
+
+    /** 带缓存的查询向量 / Cached query embedding. */
+    private float[] embedCached(String text) {
+        String key = embeddingFactory.current().providerName() + "::" + text;
+        float[] cached = queryVectorCache.get(key);
+        if (cached != null) return cached;
+        // embed 在缓存锁外执行，慢请求不阻塞其他检索 / Embed outside the map lock so a
+        // slow request does not stall other lookups.
+        float[] vector = alignDimension(embeddingFactory.current().embed(text));
+        queryVectorCache.put(key, vector);
+        return vector;
+    }
+
+    /**
      * 混合检索：向量召回 + 全文召回，Zvec 内部 RRF 融合。
      * Hybrid retrieval: vector recall + full-text recall, fused by Zvec's internal RRF.
      *
@@ -280,7 +318,7 @@ public class KnowledgeVectorStore {
     public List<Hit> hybridSearch(String query, String kindFilter, String datasetId, int topK) {
         if (!ready || query == null || query.isBlank()) return Collections.emptyList();
         try {
-            float[] vector = alignDimension(embeddingFactory.current().embed(query));
+            float[] vector = embedCached(query);
             String filter = buildFilter(kindFilter, datasetId);
 
             // 用 try-with-resources 确保 native 对象释放 / try-with-resources ensures native objects are freed.
@@ -442,6 +480,19 @@ public class KnowledgeVectorStore {
      * 调用方只读，不应写入 / Callers must treat it as read-only.
      */
     public Collection rawCollection() { return collection; }
+
+    /**
+     * 在串行锁内执行 collection 检视操作 / Run a collection inspection under the serial lock.
+     *
+     * <p>与 {@link VectorService#inspect} 相同的理由：Inspector 的 native 调用必须与
+     * upsert/flush 串行化。/ Same rationale as VectorService#inspect: Inspector's native
+     * calls must be serialized with upsert/flush.
+     */
+    public <T> T inspect(java.util.function.Supplier<T> action) {
+        synchronized (zvecLock) {
+            return action.get();
+        }
+    }
 
     // ---- helpers ----
 

@@ -41,14 +41,19 @@ public class AnalysisOrchestrator {
      * @param llm        当前厂商 / Active provider.
      * @param defaultTemp 兜底温度 / Fallback temperature.
      * @param defaultMaxTokens 兜底最大 token / Fallback max tokens.
-     * @param stream     是否流式 / Whether streaming.
+     * @param jsonMode   是否强制 JSON 输出（plan 需要，conclude 是自然语言）/ Whether to force JSON output.
      * @return 对话选项 / Chat options.
      */
-    private ChatOptions options(LlmProvider llm, double defaultTemp, int defaultMaxTokens, boolean stream) {
+    private ChatOptions options(LlmProvider llm, double defaultTemp, int defaultMaxTokens, boolean jsonMode) {
         var cfg = props.getLlm().getProviders().get(llm.providerName());
         double temp = cfg != null ? cfg.getTemperature() : defaultTemp;
         int maxTokens = cfg != null && cfg.getMaxTokens() > 0 ? cfg.getMaxTokens() : defaultMaxTokens;
-        return new ChatOptions(llm.chatModel(), temp, maxTokens, stream);
+        // 注意：第 4 参是 jsonMode 而非 stream——流式与否由 chatStream/buildChatRequest 单独控制，
+        // 传错会把 response_format 强加给不支持的厂商导致 plan 4xx 降级规则引擎。
+        // / The 4th arg is jsonMode, NOT stream — streaming is controlled separately by
+        // chatStream/buildChatRequest. Mispassing stream here forces response_format onto
+        // providers that do not support it, degrading plan to the rule engine via 4xx.
+        return new ChatOptions(llm.chatModel(), temp, maxTokens, jsonMode);
     }
 
     /** Whether the active LLM provider has a usable API key. */
@@ -297,10 +302,13 @@ public class AnalysisOrchestrator {
                 + (result.getConclusion() != null ? result.getConclusion() : "");
 
         // 向量主键用内容哈希派生：Zvec upsert 按 PK 覆盖，同内容反复分析只保留一份，
-        // 不再随分析次数无限膨胀。/ Deterministic PKs derived from content: Zvec upsert
-        // overwrites by PK, so repeated identical analyses converge to one vector.
-        vectors.upsert("history-" + shortHash(historyText), "history", dataset.getId(), historyText);
-        vectors.upsert("concl-" + shortHash(conclusionText), "conclusion", dataset.getId(), conclusionText);
+        // 不再随分析次数无限膨胀。两条向量合并为一次批量写入，只付一次刷盘代价。
+        // / Deterministic PKs derived from content: Zvec upsert overwrites by PK, so
+        // repeated identical analyses converge to one vector. Both go in one batched
+        // write to pay a single flush cost.
+        vectors.upsertAll(List.of(
+                new VectorService.SemanticItem("history-" + shortHash(historyText), "history", dataset.getId(), historyText),
+                new VectorService.SemanticItem("concl-" + shortHash(conclusionText), "conclusion", dataset.getId(), conclusionText)));
 
         // 同时沉淀为知识库的 case 条目，供跨会话的 few-shot 检索使用
         // Also distill into the knowledge base as a case entry for cross-session few-shot retrieval.
@@ -324,11 +332,15 @@ public class AnalysisOrchestrator {
     /** Index all dataset columns with their semantic descriptions. */
     public void indexDataset(Dataset dataset) {
         if (dataset.getColumns() == null) return;
+        // 全部字段一次批量写入：宽表上传不再按列数放大刷盘次数。
+        // / One batched write for all columns: wide-table upload no longer multiplies flushes.
+        List<VectorService.SemanticItem> items = new ArrayList<>(dataset.getColumns().size());
         for (ColumnInfo col : dataset.getColumns()) {
             String text = String.format("数据集[%s]字段[%s] 类型[%s] 样例[%s]",
                     dataset.getName(), col.getName(), col.getType(), col.getSampleValues());
-            vectors.upsert(dataset.getId() + "_" + col.getName(), "field", dataset.getId(), text);
+            items.add(new VectorService.SemanticItem(dataset.getId() + "_" + col.getName(), "field", dataset.getId(), text));
         }
+        vectors.upsertAll(items);
     }
 
     private String stripCodeFence(String s) {

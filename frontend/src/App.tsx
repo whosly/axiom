@@ -139,13 +139,19 @@ function App() {
 
     // 用 UUID 避免同一毫秒连续发送产生重复 React key；init 事件到达后再换成后端持久化 ID。
     // UUID avoids duplicate React keys on rapid sends; swap to the server ID once init arrives.
-    let userMsgId = 'u-' + crypto.randomUUID();
+    // randomUUID 仅在安全上下文（HTTPS/localhost）可用，非安全上下文降级到随机数。
+    // / randomUUID requires a secure context (HTTPS/localhost); fall back otherwise.
+    const uuid = (): string =>
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    let userMsgId = 'u-' + uuid();
     const userMsg: ChatMessage = {
       id: userMsgId, role: 'user', content: question,
       createdAt: new Date().toISOString(),
     };
     const assistantMsg: ChatMessage = {
-      id: 'a-' + crypto.randomUUID(), role: 'assistant', content: '',
+      id: 'a-' + uuid(), role: 'assistant', content: '',
       createdAt: new Date().toISOString(), streaming: true,
     };
     setMessages(prev => [...prev, userMsg, assistantMsg]);
@@ -164,12 +170,19 @@ function App() {
       setMessages(prev => prev.map(m => m.id === assistantMsg.id ? updater(m) : m));
     };
 
+    // 流是否已建立：收到任一事件即说明后端已落库用户消息与会话，
+    // 此后的失败不能在前端移除用户消息（会造成前后端状态分歧）。
+    // / Whether the stream established: any event means the backend already
+    // persisted the user message and session, so later failures must not
+    // remove the user message client-side (that would diverge from the server).
+    let streamEstablished = false;
     try {
       await api.chat({ sessionId: currentSessionId || undefined, datasetId: selectedDatasetId,
         message: question, model: selectedModel }, (event: SSEEvent) => {
         // 会话已切换：旧流的所有事件一律丢弃，绝不能写入新会话的状态。
         // After a switch every event of the old stream must be discarded.
         if (!alive()) return;
+        streamEstablished = true;
         switch (event.type) {
           case 'init':
             setCurrentSessionId(event.sessionId);
@@ -210,6 +223,10 @@ function App() {
             break;
           case 'error':
             updateAssistant(m => ({ ...m, content: '分析失败：' + event.message, streaming: false, stage: undefined }));
+            // 首次提问就报错时后端同样已保存会话，侧栏需要同步进来
+            // / The backend persists the session even when the first question fails;
+            // refresh the sidebar so the session shows up.
+            loadSessions();
             break;
         }
       }, controller.signal);
@@ -222,6 +239,15 @@ function App() {
       const aborted = controller.signal.aborted;
       if (aborted) {
         updateAssistant(m => ({ ...m, content: m.content || '已停止生成', streaming: false, stage: undefined }));
+      } else if (streamEstablished) {
+        // 流已建立：用户消息已被后端持久化，保留它；只收尾助手消息并提示，
+        // 否则重开该会话时被移除的用户消息会"复活"。
+        // / Stream established: keep the persisted user message; only finish the
+        // assistant message. Removing the user message would make it "revive"
+        // when reopening the session.
+        updateAssistant(m => ({ ...m, content: m.content || '请求中断：' + (e as Error).message, streaming: false, stage: undefined }));
+        notifyError('请求失败 / Request failed: ' + (e as Error).message);
+        setInput(question);
       } else {
         setMessages(prev => prev.filter(m => m.id !== userMsgId && m.id !== assistantMsg.id));
         setInput(question);
@@ -394,7 +420,12 @@ function App() {
               <textarea
                 value={input}
                 onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                onKeyDown={e => {
+                  // 中文输入法选字回车（isComposing）是确认候选词，不是发送
+                  // / Enter during IME composition confirms a candidate, not a send.
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                }}
                 placeholder={selectedDataset ? '用自然语言提问，例如：分析各地区的销售额趋势...' : '请先选择数据集'}
                 disabled={!selectedDataset || isLoading}
                 rows={2}

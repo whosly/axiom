@@ -13,11 +13,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import jakarta.annotation.PreDestroy;
+
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /** SSE streaming chat that unifies plan / result / chart / conclusion into one conversation. */
 @Slf4j
@@ -37,6 +40,25 @@ public class AnalysisController {
     // / Bounded pool: each task spans DuckDB, streaming LLM, embedding and Zvec flush;
     // an unbounded cached pool would exhaust threads and API quota under load.
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
+
+    /**
+     * 关闭线程池让 JVM 能优雅退出：worker 是非 daemon 线程，不 shutdown 的话
+     * Spring 上下文已关但空闲 worker 永不退出，进程挂到被强杀。
+     * / Shut down the pool so the JVM can exit gracefully — workers are non-daemon
+     * threads and would linger after the Spring context closes until SIGKILL.
+     */
+    @PreDestroy
+    void shutdownExecutor() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
 
     @GetMapping("/health")
     public Map<String, Object> health() {

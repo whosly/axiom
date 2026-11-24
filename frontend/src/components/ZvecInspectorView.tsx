@@ -50,6 +50,11 @@ export function ZvecInspectorView() {
     try {
       const r = await api.zvecDocs(name, 100);
       if (seq !== loadSeq.current) return;
+      // 后端对不可用集合返回 200 + error 字段，必须显式提示而不是显示"暂无文档"
+      // / Backend returns 200 + error for unavailable collections; surface it rather
+      // than showing an empty state.
+      if (r.error) setLoadError(String(r.error));
+      else setLoadError('');
       setDocs(r.docs || []);
     } catch (e) {
       console.error(e);

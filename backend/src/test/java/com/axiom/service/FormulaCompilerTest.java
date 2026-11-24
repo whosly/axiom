@@ -121,4 +121,71 @@ class FormulaCompilerTest {
         assertThatThrownBy(() -> FormulaCompiler.validateSyntax(""))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("意外运算符必须报语法错误而非误报未知字段")
+    void unexpectedOperatorTokens() {
+        // 此前 "*"/")" 兜底被当作字段引用，报"未知字段「*」"的误导性错误
+        // / Previously "*"/")" fell through to FieldRef and reported a misleading unknown-column error.
+        assertThatThrownBy(() -> FormulaCompiler.validateSyntax("销售额 * * 成本"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("意外的运算符");
+        assertThatThrownBy(() -> FormulaCompiler.validateSyntax("销售额 + )"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("意外的运算符");
+        assertThatThrownBy(() -> FormulaCompiler.validateSyntax("()"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("意外的运算符");
+        assertThatThrownBy(() -> FormulaCompiler.validateSyntax("销售额 / / 成本"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("意外的运算符");
+    }
+
+    @Test
+    @DisplayName("括号嵌套超过上限必须报错而非栈溢出")
+    void deepParenNestingFailsGracefully() {
+        // 65 层括号：解析期上限 64 层，报 IllegalArgumentException 而不是 StackOverflowError
+        // / 65 paren levels: parse-time cap rejects with IllegalArgumentException, not StackOverflowError.
+        StringBuilder deep = new StringBuilder();
+        for (int i = 0; i < 65; i++) deep.append('(');
+        deep.append("销售额");
+        for (int i = 0; i < 65; i++) deep.append(')');
+        assertThatThrownBy(() -> FormulaCompiler.validateSyntax(deep.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("括号嵌套过深");
+    }
+
+    @Test
+    @DisplayName("合法的左结合长链不受深度限制")
+    void longFlatChainCompiles() {
+        // 100 项加总是合法财务公式，深度只随公式引用展开增长，不应误判"嵌套过深"
+        // / A 100-term sum is legitimate; depth counts formula expansion, not operators.
+        StringBuilder flat = new StringBuilder("销售额");
+        for (int i = 0; i < 99; i++) flat.append(" + 销售额");
+        String sql = FormulaCompiler.compile(flat.toString(), NO_REFS::get, ANY, "SUM");
+        assertThat(sql).startsWith("(");
+        assertThat(sql).contains("SUM(\"销售额\")");
+        // 100 个叶子全部展开 / All 100 leaves expanded.
+        assertThat(sql.split("SUM\\(\"销售额\"\\)", -1).length - 1).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("公式引用链超过上限报错")
+    void formulaChainCap() {
+        Map<String, String> formulas = new java.util.HashMap<>();
+        formulas.put("F0", "销售额 + 1");
+        for (int i = 1; i <= 40; i++) formulas.put("F" + i, "F" + (i - 1) + " + 1");
+        assertThatThrownBy(() -> FormulaCompiler.compile("F40", formulas::get, ANY, "SUM"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("引用链过长");
+    }
+
+    @Test
+    @DisplayName("超出 long 范围的常数不发生截断饱和")
+    void hugeConstantsKeepPrecision() {
+        // 此前 (long) 1e20 饱和为 Long.MAX_VALUE，静默产出错误数字
+        // / Previously (long) 1e20 saturated to Long.MAX_VALUE, silently wrong.
+        String sql = FormulaCompiler.compile("销售额 * 100000000000000000000", NO_REFS::get, ANY, "SUM");
+        assertThat(sql).contains("1.0E20");
+    }
 }

@@ -79,16 +79,21 @@ USER axiom
 COPY --from=backend-builder /build/app.jar /app/app.jar
 
 # 创建数据目录结构 / Create data directories
-RUN mkdir -p /app/data/h2 /app/data/duckdb /app/data/sqlite /app/data/zvec /app/data/models/bge-small-zh-v1.5
+RUN mkdir -p /app/data/h2 /app/data/duckdb /app/data/sqlite /app/data/zvec /app/models/bge-small-zh-v1.5
 
 # 下载本地 embedding 模型（bge-small-zh-v1.5 ONNX）
+# 放在 /app/models 而非 /app/data：/app/data 是 VOLUME，改挂宿主目录或卷已有数据时
+# 会遮蔽镜像内模型导致启动缺模型；模型随镜像分发、数据随卷持久化。
+# / Keep models in /app/models, NOT /app/data: the VOLUME would shadow image-baked
+# models when the volume is host-mounted or pre-populated.
 # 使用 hf-mirror 镜像，构建期下载一次；--retry 提升弱网构建成功率
 # Download embedding model at build time via mirror; --retry improves reliability on weak networks.
 ARG MODEL_MIRROR=https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main
-RUN curl -fsSL --retry 3 --retry-delay 3 -o /app/data/models/bge-small-zh-v1.5/vocab.txt \
+RUN curl -fsSL --retry 3 --retry-delay 3 -o /app/models/bge-small-zh-v1.5/vocab.txt \
       "${MODEL_MIRROR}/vocab.txt" && \
-    curl -fsSL --retry 3 --retry-delay 3 -o /app/data/models/bge-small-zh-v1.5/model.onnx \
-      "${MODEL_MIRROR}/onnx/model.onnx"
+    curl -fsSL --retry 3 --retry-delay 3 -o /app/models/bge-small-zh-v1.5/model.onnx \
+      "${MODEL_MIRROR}/onnx/model.onnx" && \
+    chown -R axiom:axiom /app/models
 
 # 优雅停机：容器停止时给 Spring Boot `shutdown: graceful` 留出收尾时间
 # Graceful stop: give Spring Boot `shutdown: graceful` time to finish in-flight requests.
@@ -107,14 +112,14 @@ ENV DATA_DIR=/app/data \
     ZVEC_PATH=/app/data/zvec/dataset_semantics \
     ZVEC_KNOWLEDGE_PATH=/app/data/zvec/knowledge_base_v2 \
     EMBEDDING_PROVIDER=local \
-    EMBEDDING_MODEL_PATH=/app/data/models/bge-small-zh-v1.5/model.onnx \
-    EMBEDDING_VOCAB_PATH=/app/data/models/bge-small-zh-v1.5/vocab.txt \
+    EMBEDDING_MODEL_PATH=/app/models/bge-small-zh-v1.5/model.onnx \
+    EMBEDDING_VOCAB_PATH=/app/models/bge-small-zh-v1.5/vocab.txt \
     ZVEC_DIMENSION=512 \
     JAVA_OPTS="-Xmx1g"
 
 EXPOSE 8080
 
-# 数据卷：持久化数据库、向量、模型 / Volume for DB, vectors and model
+# 数据卷：持久化数据库、向量（模型在 /app/models，随镜像分发）/ Volume for DB & vectors only; models ship with the image.
 VOLUME ["/app/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

@@ -117,6 +117,18 @@ public class DataSourceConfig {
         return new JdbcTemplate(ds);
     }
 
+    /**
+     * 元数据事务模板：供服务层以编程方式包住多步写（如图谱全量重建），
+     * 中途失败整体回滚而不是留下半图。
+     * / Transaction template for the metadata store, letting services wrap multi-step
+     * writes (e.g. full graph rebuild) so a mid-way failure rolls back cleanly.
+     */
+    @Bean
+    public org.springframework.transaction.support.TransactionTemplate transactionTemplate(
+            @Qualifier("metaTransactionManager") PlatformTransactionManager tm) {
+        return new org.springframework.transaction.support.TransactionTemplate(tm);
+    }
+
     @Bean(name = "metaJdbcTemplate")
     @Primary
     public JdbcTemplate metaJdbcTemplate(@Qualifier("metaDataSource") DataSource ds) {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Button, Tag, Loading, Select } from 'tdesign-react';
 import { RefreshIcon } from 'tdesign-icons-react';
@@ -33,33 +33,59 @@ export function KnowledgeGraphView() {
   const [graph, setGraph] = useState<GraphPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string>('');
+  // 加载失败提示条：失败不能吞成"暂无数据"空态，误导用户去点重建
+  // / Load-failure banner: failures must surface, not masquerade as an empty graph.
+  const [loadError, setLoadError] = useState<string>('');
+  // 请求序号 + 卸载守卫：组件卸载后 in-flight 响应不再回写 state
+  // / Request sequence + unmount guard: in-flight responses never write back after unmount.
+  const loadSeq = useRef(0);
+  const alive = () => loadSeq.current >= 0;
 
   const load = async () => {
+    loadSeq.current++;
     setLoading(true);
+    setLoadError('');
     try {
       const g = await api.getGraph();
+      if (!alive()) return;
       setGraph({ nodes: g.nodes || [], edges: g.edges || [] });
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if (!alive()) return;
+      setLoadError('图谱加载失败: ' + (e as Error).message);
+    } finally {
+      if (alive()) setLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    // 卸载后 alive() 恒为 false / alive() stays false once unmounted.
+    return () => { loadSeq.current = -1; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rebuild = async () => {
     setLoading(true);
+    setLoadError('');
     try { await api.rebuildGraph(); await load(); }
     catch (e) { notifyError('重建失败: ' + (e as Error).message); }
-    finally { setLoading(false); }
+    finally { if (loadSeq.current >= 0) setLoading(false); }
   };
 
   const focusNeighbors = async (id: string) => {
     if (!id) { load(); return; }
+    loadSeq.current++;
     setLoading(true);
+    setLoadError('');
     try {
       const r = await api.graphNeighbors(id, 2);
+      if (!alive()) return;
       setGraph({ nodes: r.nodes || [], edges: r.edges || [] });
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if (!alive()) return;
+      setLoadError('邻居查询失败: ' + (e as Error).message);
+    } finally {
+      if (alive()) setLoading(false);
+    }
   };
 
   const option = useMemo(() => {
@@ -135,6 +161,12 @@ export function KnowledgeGraphView() {
         </div>
       </header>
       <div className="flex-1 min-h-0 p-2">
+        {loadError && (
+          <div className="mx-2 mt-2 px-3 py-2 rounded text-sm"
+            style={{ background: 'var(--td-error-color-1)', color: 'var(--td-error-color-6)' }}>
+            {loadError}
+          </div>
+        )}
         {loading ? <div className="flex justify-center items-center h-full"><Loading /></div> : (
           graph && graph.nodes.length > 0
             ? <ReactECharts option={option} style={{ height: '100%', width: '100%' }} notMerge />

@@ -11,13 +11,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Zvec 数据查看 API / Zvec data inspection API.
  *
  * <p>回答「Zvec 里到底存了什么」：列出两个 collection 的概览、文档、单文档详情。
+ * 所有 native 调用都通过所属服务的串行锁执行（{@code inspect}），与写入/flush 互斥。
  * / Answers "what is stored in Zvec": overview, documents and per-document detail
- * for both collections.
+ * for both collections. All native calls run through the owning service's serial
+ * lock so inspection never races with writes or flushes.
  */
 @Slf4j
 @RestController
@@ -34,8 +37,10 @@ public class ZvecController {
     @GetMapping("/collections")
     public Map<String, Object> collections() {
         List<Map<String, Object>> list = new ArrayList<>();
-        list.add(inspector.overview(props.getZvec().getCollection(), vectorService.rawCollection(), vectorService.isReady()));
-        list.add(inspector.overview(props.getZvec().getKnowledgeCollection(), knowledgeStore.rawCollection(), knowledgeStore.isReady()));
+        list.add(vectorService.inspect(() ->
+                inspector.overview(props.getZvec().getCollection(), vectorService.rawCollection(), vectorService.isReady())));
+        list.add(knowledgeStore.inspect(() ->
+                inspector.overview(props.getZvec().getKnowledgeCollection(), knowledgeStore.rawCollection(), knowledgeStore.isReady())));
         return Map.of("collections", list);
     }
 
@@ -48,9 +53,9 @@ public class ZvecController {
     @GetMapping("/collections/{name}/docs")
     public Map<String, Object> docs(@PathVariable String name,
                                     @RequestParam(defaultValue = "50") int limit) {
-        org.zvec.binding.Collection coll = resolve(name);
-        if (coll == null) return Map.of("docs", List.of(), "error", "collection 不可用");
-        return Map.of("docs", inspector.listDocs(coll, Math.min(limit, 500)));
+        Object docs = withCollection(name, coll -> inspector.listDocs(coll, Math.min(limit, 500)));
+        if (docs == null) return Map.of("docs", List.of(), "error", "collection 不可用");
+        return Map.of("docs", docs);
     }
 
     /**
@@ -61,19 +66,24 @@ public class ZvecController {
      */
     @GetMapping("/collections/{name}/docs/{id}")
     public Map<String, Object> doc(@PathVariable String name, @PathVariable String id) {
-        org.zvec.binding.Collection coll = resolve(name);
-        if (coll == null) return Map.of("error", "collection 不可用");
-        Map<String, Object> doc = inspector.docDetail(coll, id);
-        return doc == null ? Map.of("error", "文档不存在") : Map.of("doc", doc);
+        Object doc = withCollection(name, coll -> inspector.docDetail(coll, id));
+        if (doc == null) return Map.of("error", "文档不存在");
+        return Map.of("doc", doc);
     }
 
-    /** 根据名称解析 collection / Resolve collection by name. */
-    private org.zvec.binding.Collection resolve(String name) {
+    /**
+     * 按名称定位 collection 并在所属服务的串行锁内执行操作；不可用返回 null。
+     * / Resolve the collection by name and run the action under the owning
+     * service's serial lock; null when the collection is unavailable.
+     */
+    private Object withCollection(String name, Function<org.zvec.binding.Collection, Object> action) {
         if (props.getZvec().getCollection().equals(name)) {
-            return vectorService.isReady() ? vectorService.rawCollection() : null;
+            if (!vectorService.isReady()) return null;
+            return vectorService.inspect(() -> action.apply(vectorService.rawCollection()));
         }
         if (props.getZvec().getKnowledgeCollection().equals(name)) {
-            return knowledgeStore.isReady() ? knowledgeStore.rawCollection() : null;
+            if (!knowledgeStore.isReady()) return null;
+            return knowledgeStore.inspect(() -> action.apply(knowledgeStore.rawCollection()));
         }
         return null;
     }
