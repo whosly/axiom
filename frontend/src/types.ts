@@ -105,6 +105,8 @@ export interface KnowledgeEntry {
   sourceId: string;
   datasetId?: string;
   status: string;
+  chunkIndex?: number;
+  textHash?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -153,3 +155,110 @@ export const INTENT_COLORS: Record<string, string> = {
   compare: '#ed7b2f',
   summary: '#8e56ff',
 };
+
+// ---- 知识图谱 / Knowledge graph ----
+
+/**
+ * 图谱节点：后端用 JdbcTemplate.queryForList 序列化，H2 场景产出大写键（ID/TYPE/LABEL），
+ * 其他场景为小写键，视图层统一经下方归一工具读取，不直接访问字段。
+ * / Graph node: the backend serializes via JdbcTemplate.queryForList, which yields
+ * uppercase keys on H2 and lowercase elsewhere; read through the normalizers below.
+ */
+export interface GraphNode {
+  id?: string; ID?: string;
+  type?: string; TYPE?: string;
+  label?: string; LABEL?: string;
+}
+
+/** 图谱边：同 GraphNode 的键大小写差异 / Graph edge (same key-case caveat as GraphNode). */
+export interface GraphEdge {
+  source?: string; SOURCE?: string;
+  target?: string; TARGET?: string;
+  relation?: string; RELATION?: string;
+}
+
+/** GET /knowledge/graph 响应 / Graph payload. */
+export interface GraphPayload {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  stats?: Record<string, unknown>;
+}
+
+/** 邻居子图响应 / Neighbor subgraph response. */
+export interface GraphNeighborsPayload extends GraphPayload {
+  center: string;
+  hops: number;
+}
+
+/** 图谱社区发现结果 / Graph community detection result. */
+export interface GraphCommunity {
+  size: number;
+  members: Array<{ id: string; label: string }>;
+  typeDistribution: Record<string, number>;
+}
+
+/** 最短路径结果 / Shortest-path result. */
+export interface GraphPathResult {
+  path: Array<{ id: string; label: string; type: string }>;
+  length: number;
+  reachable: boolean;
+  message?: string;
+}
+
+/** 关联条目 / Related entry. */
+export interface GraphRelatedItem {
+  id: string;
+  label: string;
+  sharedRelations: number;
+}
+
+/** 图谱响应归一工具 / Graph payload normalizers. */
+export const nodeId = (n: GraphNode): string => String(n.id ?? n.ID ?? '');
+export const nodeLabel = (n: GraphNode): string => String(n.label ?? n.LABEL ?? nodeId(n));
+export const nodeType = (n: GraphNode): string => String(n.type ?? n.TYPE ?? 'knowledge');
+export const edgeSource = (e: GraphEdge): string => String(e.source ?? e.SOURCE ?? '');
+export const edgeTarget = (e: GraphEdge): string => String(e.target ?? e.TARGET ?? '');
+export const edgeRelation = (e: GraphEdge): string => String(e.relation ?? e.RELATION ?? '');
+
+// ---- Zvec 检视 / Zvec inspector ----
+
+/** Zvec collection 统计 / Zvec collection summary. */
+export interface ZvecCollection {
+  name: string;
+  docCount?: number;
+  indexCount?: number;
+  ready?: boolean;
+}
+
+/**
+ * Zvec 文档：字段与 collection schema 相关（knowledge/document 两种 schema），
+ * 保留索引签名以透传任意字段，已知字段显式声明。
+ * / Zvec doc: fields depend on the collection schema; known fields are declared and an
+ * index signature passes unknown fields through for the JSON detail view.
+ */
+export interface ZvecDoc {
+  id?: string;
+  title?: string;
+  kind?: string;
+  embedding?: string;
+  [key: string]: unknown;
+}
+
+/** 处理链路步骤 / Lineage step. */
+export interface KnowledgeLineageStep {
+  step?: string;
+  stage?: string;
+  detail?: string;
+  [key: string]: unknown;
+}
+
+/** 知识条目详情（详情抽屉响应）/ Knowledge entry detail (detail-dialog response). */
+export interface KnowledgeDetail {
+  entry?: KnowledgeEntry;
+  sourceLabel?: string;
+  datasetName?: string;
+  vector?: { present?: boolean; dimension?: number; contentLength?: number };
+  lineage?: KnowledgeLineageStep[];
+  storage?: Record<string, unknown>;
+  [key: string]: unknown;
+}

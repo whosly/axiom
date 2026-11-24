@@ -90,7 +90,12 @@ public class BertTokenizer {
         tokens.add("[SEP]");
 
         List<Long> ids = new ArrayList<>();
-        for (String t : tokens) ids.add((long) vocab.getOrDefault(t, 100)); // 100 = [UNK]
+        // [UNK] id 从词表反查，不假定固定值 100：不同词表变体的 [UNK] id 可能不同，
+        // 硬编码会在换词表时静默产出错误向量。/ Resolve [UNK] id from the vocab instead of
+        // assuming a fixed 100 — other vocab variants may differ, and hardcoding would
+        // silently produce wrong vectors.
+        int unkId = vocab.getOrDefault("[UNK]", 100);
+        for (String t : tokens) ids.add((long) vocab.getOrDefault(t, unkId));
         return ids;
     }
 
@@ -119,7 +124,7 @@ public class BertTokenizer {
                     end--;
                 }
                 if (sub == null) {
-                    sub = start == 0 ? "[UNK]" : "##[UNK]";
+                    // 整词未命中任何子串：记为 [UNK] 并跳到下一字符 / No substring hit: emit [UNK].
                     result.add("[UNK]");
                     start++;
                 } else {

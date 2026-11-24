@@ -117,19 +117,29 @@ public class AnalysisController {
         // stages (LLM conclusion, knowledge memorize) are skipped entirely.
         java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        executor.execute(() -> {
-            emitter.onError(e -> { cancelled.set(true); log.warn("[SSE] client disconnected: {}", e.getMessage()); });
+        // 生命周期回调必须在任务提交前注册：线程池排队期间客户端可能已断开，
+        // 任务体内注册会错过断开事件，plan 阶段照常执行白烧一次 LLM 调用。
+        // / Register callbacks BEFORE submitting the task: the client may disconnect
+        // while the task sits in the queue; registering inside the task would miss
+        // the disconnect and burn a plan LLM call for nobody.
+        emitter.onError(e -> { cancelled.set(true); log.warn("[SSE] client disconnected: {}", e.getMessage()); });
+        emitter.onTimeout(() -> { cancelled.set(true); emitter.complete(); });
 
+        executor.execute(() -> {
             try {
                 send(emitter, "init", Map.of("sessionId", sid, "datasetId", datasetId,
-                        "userMessageId", userId, "model", model));
+                        "userMessageId", userId, "model", model), cancelled);
 
-                send(emitter, "status", Map.of("stage", "planning", "message", "正在理解问题并生成分析计划..."));
+                send(emitter, "status", Map.of("stage", "planning", "message", "正在理解问题并生成分析计划..."), cancelled);
+                // 排队后取消检查：任务可能在队列里等了很久，客户端早已断开。
+                // / Post-queue cancellation check: the task may have waited in the
+                // queue long after the client disconnected.
+                if (cancelled.get()) { emitter.complete(); return; }
                 AnalysisPlan plan = orchestrator.plan(ds, question);
                 if (cancelled.get()) { emitter.complete(); return; }
-                send(emitter, "plan", plan);
+                send(emitter, "plan", plan, cancelled);
 
-                send(emitter, "status", Map.of("stage", "executing", "message", "正在执行分析计算..."));
+                send(emitter, "status", Map.of("stage", "executing", "message", "正在执行分析计算..."), cancelled);
                 AnalysisResult result = orchestrator.execute(ds, plan);
                 // 失败短路：execute 失败时 sql 为 null（AnalysisEngine 的错误对象）。
                 // 绝不能进入 conclude/memorize——空数据 + LLM 自由发挥 = 编造结论，
@@ -137,19 +147,19 @@ public class AnalysisController {
                 // an engine error. Never conclude/memorize here — the LLM would fabricate a
                 // conclusion from empty data and pollute the knowledge base.
                 if (result.getSql() == null) {
-                    send(emitter, "result", result);
+                    send(emitter, "result", result, cancelled);
                     send(emitter, "text", Map.of("content", result.getConclusion() == null
-                            ? "分析执行失败" : result.getConclusion()));
+                            ? "分析执行失败" : result.getConclusion()), cancelled);
                     send(emitter, "error", Map.of("message",
-                            result.getConclusion() == null ? "分析执行失败" : result.getConclusion()));
+                            result.getConclusion() == null ? "分析执行失败" : result.getConclusion()), cancelled);
                     emitter.complete();
                     return;
                 }
-                send(emitter, "result", result);
-                if (result.getChart() != null) send(emitter, "chart", result.getChart());
+                send(emitter, "result", result, cancelled);
+                if (result.getChart() != null) send(emitter, "chart", result.getChart(), cancelled);
 
                 if (cancelled.get()) { emitter.complete(); return; }
-                send(emitter, "status", Map.of("stage", "concluding", "message", "正在生成分析结论..."));
+                send(emitter, "status", Map.of("stage", "concluding", "message", "正在生成分析结论..."), cancelled);
                 // 捕获每个流式 token 后再写回 result；orchestrator.conclude 内部也会 setConclusion，
                 // 但流式场景下 controller 必须用收集到的完整文本覆盖，否则会把结论清空。
                 // Capture every streamed token and write back to result; orchestrator.conclude also
@@ -157,9 +167,15 @@ public class AnalysisController {
                 // fully collected text, otherwise the conclusion would be wiped to empty.
                 StringBuilder conclusion = new StringBuilder();
                 orchestrator.conclude(ds, question, plan, result, token -> {
+                    // 客户端已断开则立即停止消费流式 token：中断是协作式的，
+                    // 每个回调开头检查，避免断开后仍烧完整段 LLM 结论费用。
+                    // / Stop consuming tokens as soon as cancellation is flagged; the abort
+                    // is cooperative (checked per callback) so a disconnected client never
+                    // pays for the full streamed conclusion.
+                    if (cancelled.get()) return;
                     conclusion.append(token);
-                    send(emitter, "text", Map.of("content", token));
-                });
+                    send(emitter, "text", Map.of("content", token), cancelled);
+                }, cancelled);
                 if (conclusion.length() > 0) result.setConclusion(conclusion.toString());
 
                 // 取消检查：客户端已断开则不再沉淀知识/向量，避免"以为停止了但后台仍在写入"。
@@ -181,7 +197,7 @@ public class AnalysisController {
                 payload.put("result", result);
                 metaRepo.saveMessage(sid, assistantMsg, mapper.writeValueAsString(payload));
 
-                send(emitter, "done", Map.of("sessionId", sid, "messageId", assistantMsg.getId()));
+                send(emitter, "done", Map.of("sessionId", sid, "messageId", assistantMsg.getId()), cancelled);
                 emitter.complete();
                 log.info("[Chat] completed session={}", sid);
             } catch (Exception e) {
@@ -190,12 +206,11 @@ public class AnalysisController {
                 // 用 completeWithError 会让浏览器 fetch 抛 "network error"，覆盖已发送的 error 事件。
                 // Send a readable error event first, then complete normally. completeWithError would
                 // make the browser fetch throw "network error", masking the event we just sent.
-                send(emitter, "error", Map.of("message", friendlyError(e)));
+                send(emitter, "error", Map.of("message", friendlyError(e)), cancelled);
                 emitter.complete();
             }
         });
 
-        emitter.onTimeout(() -> { cancelled.set(true); emitter.complete(); });
         return emitter;
     }
 
@@ -250,6 +265,23 @@ public class AnalysisController {
         } catch (Exception e) {
             // client disconnected or emitter completed; stop pushing events
             log.debug("[SSE] skip send {}: {}", type, e.getMessage());
+        }
+    }
+
+    /**
+     * 带取消反馈的发送：send 失败（客户端已断开）时置位取消令牌，让后续昂贵阶段
+     * 尽快短路，而不是只依赖 onError 回调的触发时机。
+     * / Send variant that flags cancellation on failure: a failed send means the client
+     * is gone, so downstream expensive stages can short-circuit immediately instead of
+     * waiting for the onError callback timing.
+     */
+    private void send(SseEmitter emitter, String type, Object data,
+                      java.util.concurrent.atomic.AtomicBoolean cancelled) {
+        try {
+            emitter.send(SseEmitter.event().name(type).data(mapper.writeValueAsString(data)));
+        } catch (Exception e) {
+            cancelled.set(true);
+            log.debug("[SSE] send {} failed, marked cancelled: {}", type, e.getMessage());
         }
     }
 

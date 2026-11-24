@@ -39,9 +39,13 @@ public class KnowledgeController {
                                             @RequestParam(value = "datasetId", required = false) String datasetId) {
         try {
             return ResponseEntity.ok(documentIngestion.ingest(file, datasetId));
+        } catch (IllegalArgumentException e) {
+            // 校验类异常来自用户输入，回显安全 / Validation errors are user-input messages, safe to echo.
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("[Knowledge] document upload failed", e);
-            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(java.util.Map.of("error",
+                    "文档处理失败，请查看服务端日志 / Document processing failed, see server logs"));
         }
     }
 
@@ -82,7 +86,7 @@ public class KnowledgeController {
         String query = String.valueOf(body.getOrDefault("query", ""));
         String kind = body.get("kind") == null ? null : String.valueOf(body.get("kind"));
         String datasetId = body.get("datasetId") == null ? null : String.valueOf(body.get("datasetId"));
-        int topK = body.get("topK") == null ? 5 : Integer.parseInt(String.valueOf(body.get("topK")));
+        int topK = intParam(body.get("topK"), 5);
         List<KnowledgeVectorStore.Hit> hits = service.search(query, kind, datasetId, topK);
         return Map.of("hits", hits, "count", hits.size());
     }
@@ -122,5 +126,20 @@ public class KnowledgeController {
     @PostMapping("/{id}/restore")
     public Map<String, Object> restore(@PathVariable String id) {
         return Map.of("success", service.restore(id));
+    }
+
+    /**
+     * 解析整数参数：非数字输入抛 IllegalArgumentException，
+     * 由 GlobalExceptionHandler 统一转 400，而不是 NumberFormatException 变 500。
+     * / Parse an integer param: non-numeric input throws IllegalArgumentException,
+     * mapped to 400 by the global handler instead of a NumberFormatException 500.
+     */
+    private static int intParam(Object raw, int dflt) {
+        if (raw == null) return dflt;
+        try {
+            return Integer.parseInt(String.valueOf(raw));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("整数参数格式错误 / Invalid integer value: " + raw);
+        }
     }
 }

@@ -106,7 +106,11 @@ public class AnalysisEngine {
         // Key fixes: formatted period; filters applied; dimension/multi-metric supported.
         String periodExpr = granularity.periodSql(q(timeCol));
         boolean hasDim = plan.hasDimension();
-        String baseWhere = q(timeCol) + " IS NOT NULL" + whereClause(plan);
+        // whereClause 返回 " WHERE ..." 前缀，此处已有 WHERE，必须转换为 " AND ..." 拼接，
+        // 否则会产生双 WHERE 非法 SQL。/ whereClause() returns a " WHERE ..." prefix; the
+        // statement already has a WHERE, so filters must be joined with AND to avoid
+        // producing invalid double-WHERE SQL.
+        String baseWhere = q(timeCol) + " IS NOT NULL" + andFilters(plan);
 
         // 先取最近的 N 个 period（降序），再对全量行按这些 period 聚合。
         // 升序 + LIMIT 截掉的是最早的数据，趋势洞察会基于过期时间片。
@@ -142,7 +146,7 @@ public class AnalysisEngine {
         if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做异常识别");
 
         String groupCol = plan.hasDimension() ? plan.getDimension() : null;
-        String where = q(metric) + " IS NOT NULL" + whereClause(plan);
+        String where = q(metric) + " IS NOT NULL" + andFilters(plan);
         String sql = groupCol == null
                 ? "SELECT CAST(%s AS VARCHAR) AS item, %s AS value FROM %s WHERE %s"
                    .formatted(q(metric), q(metric), q(table), where)
@@ -402,6 +406,14 @@ public class AnalysisEngine {
             }
         }
         return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
+    }
+
+    /** 过滤条件（AND 前缀形式），用于拼接在已有 WHERE 之后 / Filters with AND prefix, for appending after an existing WHERE clause. */
+    private String andFilters(AnalysisPlan plan) {
+        String wc = whereClause(plan);
+        if (wc.isEmpty()) return "";
+        // " WHERE a = 'x'" -> " AND a = 'x'"（保留原有空格）/ strip " WHERE" and re-prefix with " AND"
+        return " AND " + wc.substring(" WHERE ".length());
     }
 
     private String orderClause(AnalysisPlan plan) {

@@ -1,53 +1,58 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, InputNumber, Select, Tag, Loading, Empty } from 'tdesign-react';
 import { SearchIcon } from 'tdesign-icons-react';
 import { api } from '../api';
 import { notifyError } from '../notify';
+import { GraphCommunity, GraphPathResult, GraphRelatedItem, nodeId, nodeLabel, nodeType } from '../types';
 
 /** 图谱推理视图 / Graph reasoning view: communities, shortest path and related entries. */
-
-type Community = { size: number; members: Array<{ id: string; label: string }>; typeDistribution: Record<string, number> };
-type PathResult = { path: Array<{ id: string; label: string; type: string }>; length: number;
-  reachable: boolean; message?: string };
-type Related = { id: string; label: string; sharedRelations: number };
 
 export function GraphReasoningView() {
   const [tab, setTab] = useState<'communities' | 'path' | 'related'>('communities');
   const [loading, setLoading] = useState(false);
-  const [communities, setCommunities] = useState<Community[]>([]);
+  const [communities, setCommunities] = useState<GraphCommunity[]>([]);
   const [iterations, setIterations] = useState(0);
   // 大图采样提示 / Large-graph sampling metadata
   const [sampling, setSampling] = useState<{ sampled: boolean; total: number; analyzed: number } | null>(null);
   const [nodeOptions, setNodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [path, setPath] = useState<PathResult | null>(null);
+  const [path, setPath] = useState<GraphPathResult | null>(null);
   const [entryId, setEntryId] = useState('');
   const [limit, setLimit] = useState(10);
-  const [related, setRelated] = useState<Related[]>([]);
+  const [related, setRelated] = useState<GraphRelatedItem[]>([]);
 
   /** 加载图谱节点供下拉选择 / Load graph nodes for dropdowns. */
   useEffect(() => {
-    api.getGraph().then((g: any) => {
-      setNodeOptions((g.nodes || []).map((n: any) => ({
-        label: String(n.LABEL ?? n.label ?? n.ID ?? n.id),
-        value: String(n.ID ?? n.id),
+    api.getGraph().then(g => {
+      setNodeOptions((g.nodes || []).map(n => ({
+        label: nodeLabel(n),
+        value: nodeId(n),
       })));
-      const kinds = (g.nodes || []).filter((n: any) => String(n.TYPE ?? n.type) === 'knowledge');
-      if (kinds.length && !entryId) setEntryId(String(kinds[0].ID ?? kinds[0].id));
+      const kinds = (g.nodes || []).filter(n => nodeType(n) === 'knowledge');
+      if (kinds.length && !entryId) setEntryId(nodeId(kinds[0]));
     }).catch(e => console.error(e));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 请求序号守卫：社区发现/路径/关联分析共享 loading，快速切换 tab 或连点时
+  // 只让最新一次请求生效，慢的旧响应不再覆盖新结果。/ Sequence guard shared by all
+  // three queries: only the newest request is allowed to settle state.
+  const seqRef = useRef(0);
+  const beginQuery = () => { const seq = ++seqRef.current; setLoading(true); return seq; };
+  const endQuery = (seq: number) => { if (seq === seqRef.current) setLoading(false); };
+  const isStale = (seq: number) => seq !== seqRef.current;
+
   /** 社区发现 / Detect communities. */
   const loadCommunities = useCallback(async () => {
-    setLoading(true);
+    const seq = beginQuery();
     try {
       const r = await api.graphCommunities(20);
+      if (isStale(seq)) return;
       setCommunities(r.communities || []);
       setIterations(r.iterations || 0);
       setSampling({ sampled: !!r.sampled, total: r.totalNodes || 0, analyzed: r.analyzedNodes || 0 });
     } catch (e) { notifyError('社区发现失败 / Failed: ' + (e as Error).message); }
-    finally { setLoading(false); }
+    finally { endQuery(seq); }
   }, []);
 
   useEffect(() => { if (tab === 'communities') loadCommunities(); }, [tab, loadCommunities]);
@@ -55,19 +60,33 @@ export function GraphReasoningView() {
   /** 最短路径 / Shortest path. */
   const findPath = async () => {
     if (!from || !to) return;
-    setLoading(true);
-    try { setPath(await api.graphPath(from, to)); }
-    catch (e) { notifyError('路径查询失败 / Failed: ' + (e as Error).message); }
-    finally { setLoading(false); }
+    const seq = beginQuery();
+    try {
+      const r = await api.graphPath(from, to);
+      if (!isStale(seq)) setPath(r);
+    }
+    catch (e) {
+      notifyError('路径查询失败 / Failed: ' + (e as Error).message);
+      // 失败时清掉旧结果：陈旧数据与新一次失败混排会被误读为本次结果。
+      // / Clear stale results on failure so old data is never mistaken for the new query.
+      if (!isStale(seq)) setPath(null);
+    }
+    finally { endQuery(seq); }
   };
 
   /** 关联分析 / Related entries. */
   const findRelated = async () => {
     if (!entryId) return;
-    setLoading(true);
-    try { setRelated((await api.graphRelated(entryId, limit)).related || []); }
-    catch (e) { notifyError('关联分析失败 / Failed: ' + (e as Error).message); }
-    finally { setLoading(false); }
+    const seq = beginQuery();
+    try {
+      const r = await api.graphRelated(entryId, limit);
+      if (!isStale(seq)) setRelated(r.related || []);
+    }
+    catch (e) {
+      notifyError('关联分析失败 / Failed: ' + (e as Error).message);
+      if (!isStale(seq)) setRelated([]);
+    }
+    finally { endQuery(seq); }
   };
 
   return (

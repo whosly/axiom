@@ -107,7 +107,10 @@ public class DocumentIngestionService {
         List<DocumentChunkRequest> chunks = new ArrayList<>();
         String[] paragraphs = text.split("\\n\\s*\\n");
         StringBuilder current = new StringBuilder();
-        int idx = 0;
+        // 用单元素数组在 appendPiece 间传递计数器（Java int 按值传递，形参自增不影响调用方）。
+        // / Pass the chunk counter through a one-element box: Java ints are passed by value,
+        // so incrementing a parameter would never propagate back to the caller.
+        int[] idx = {0};
         for (String para : paragraphs) {
             String p = para.trim();
             if (p.isEmpty()) continue;
@@ -116,27 +119,36 @@ public class DocumentIngestionService {
             // effective length.
             if (p.length() > CHUNK_SIZE) {
                 for (String piece : splitOversized(p)) {
-                    appendPiece(chunks, piece, fileName, idx, current);
+                    idx[0] = appendPiece(chunks, piece, fileName, idx[0], current);
                 }
                 continue;
             }
-            appendPiece(chunks, p, fileName, idx, current);
+            idx[0] = appendPiece(chunks, p, fileName, idx[0], current);
         }
-        if (current.length() > 0) addChunk(chunks, current.toString(), fileName, idx);
+        if (current.length() > 0) addChunk(chunks, current.toString(), fileName, idx[0]);
         return chunks;
     }
 
-    /** 追加一个段落并按预算滚动出块 / Append a paragraph, rolling chunks by budget. */
-    private void appendPiece(List<DocumentChunkRequest> chunks, String p, String fileName,
-                             int idx, StringBuilder current) {
+    /**
+     * 追加一个段落并按预算滚动出块，返回滚动后的块序号 / Append a paragraph, rolling chunks by
+     * budget; returns the chunk index to continue with after a possible flush.
+     */
+    private int appendPiece(List<DocumentChunkRequest> chunks, String p, String fileName,
+                            int idx, StringBuilder current) {
+        int next = idx;
         if (current.length() + p.length() > CHUNK_SIZE && current.length() > 0) {
-            addChunk(chunks, current.toString(), fileName, idx++);
+            addChunk(chunks, current.toString(), fileName, next);
             // 重叠：保留上一块尾部 / Overlap: keep tail of previous chunk.
             String tail = current.substring(Math.max(0, current.length() - OVERLAP));
             current.setLength(0);
             current.append(tail);
+            next++;
         }
+        // 触发滚动本段的 p 不能丢：滚动后追加到新块，下一轮再判超限。
+        // / The paragraph that triggered a flush must not be dropped: append it to
+        // the fresh chunk; the budget check happens on the next iteration.
         current.append(p).append("\n");
+        return next;
     }
 
     /** 超长段落按句边界粗切，再兜底硬切 / Split an oversized paragraph by sentence, then hard-cut. */

@@ -57,9 +57,13 @@ public class DatasetController {
         try {
             ParsedData parsed = ingestion.parse(file.getBytes(), file.getOriginalFilename(), file.getContentType());
             return ResponseEntity.ok(registerDataset(parsed, file.getOriginalFilename(), "file"));
+        } catch (IllegalArgumentException e) {
+            // 解析校验类异常来自用户文件内容，回显安全 / Parse validation messages are safe to echo.
+            return ResponseEntity.badRequest().body(Map.of("error", "解析失败: " + e.getMessage()));
         } catch (Exception e) {
             log.error("[Dataset] upload failed", e);
-            return ResponseEntity.badRequest().body(Map.of("error", "解析失败: " + e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("error",
+                    "解析失败，请查看服务端日志 / Parse failed, see server logs"));
         }
     }
 
@@ -74,9 +78,13 @@ public class DatasetController {
             ParsedData parsed = ingestion.parsePasted(text);
             ParsedData withName = new ParsedData(parsed.headers(), parsed.rows(), parsed.columns());
             return ResponseEntity.ok(registerDataset(withName, name, "paste"));
+        } catch (IllegalArgumentException e) {
+            // 解析校验类异常来自用户输入，回显安全 / Parse validation messages are safe to echo.
+            return ResponseEntity.badRequest().body(Map.of("error", "解析失败: " + e.getMessage()));
         } catch (Exception e) {
             log.error("[Dataset] paste failed", e);
-            return ResponseEntity.badRequest().body(Map.of("error", "解析失败: " + e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("error",
+                    "解析失败，请查看服务端日志 / Parse failed, see server logs"));
         }
     }
 
@@ -109,7 +117,11 @@ public class DatasetController {
             ParsedData parsed = ingestion.parsePasted(csv);
             return ResponseEntity.ok(registerDataset(parsed, "示例销售数据", "sample"));
         } catch (Exception e) {
-            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+            // 示例数据与用户输入无关，异常属服务端问题：记录日志、返回通用文案。
+            // / Sample data is server-owned; failures are internal — log and return a generic message.
+            log.error("[Dataset] sample registration failed", e);
+            return ResponseEntity.status(500).body(Map.of("error",
+                    "示例数据注册失败，请查看服务端日志 / Sample registration failed, see server logs"));
         }
     }
 

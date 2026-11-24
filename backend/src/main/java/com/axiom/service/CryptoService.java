@@ -45,11 +45,26 @@ public class CryptoService {
     private byte[] resolveKey() {
         try {
             String envKey = System.getenv("DATASOURCE_ENCRYPTION_KEY");
-            String material = (envKey != null && !envKey.isBlank())
-                    ? envKey
-                    : System.getenv("HOSTNAME") + "|" + System.getProperty("user.name") + "|axiom";
+            if (envKey == null || envKey.isBlank()) {
+                // 回退密钥可被预知（用户名可猜测、HOSTNAME 环境变量在部分环境缺失），
+                // 只提供混淆级保护。显式警告以提示运维配置真实密钥。
+                // / The fallback key is predictable and HOSTNAME may be absent on some
+                // platforms; it offers obfuscation only. Warn loudly so operators
+                // configure a real key.
+                log.warn("[Crypto] DATASOURCE_ENCRYPTION_KEY 未配置，回退到主机名+用户名派生密钥："
+                        + "该密钥可被预知，加密仅具混淆作用，建议显式配置环境变量。/ "
+                        + "Falling back to a derived key; set DATASOURCE_ENCRYPTION_KEY for real protection.");
+                String host = System.getenv("HOSTNAME");
+                // 兼容历史密文：旧实现直接字符串拼接，HOSTNAME 缺失时 material 为 "null|..."。
+                // / Keep legacy ciphertext compatible: the old code concatenated null,
+                // producing "null|..." when HOSTNAME is absent.
+                String material = (host == null ? "null" : host)
+                        + "|" + System.getProperty("user.name") + "|axiom";
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                return java.util.Arrays.copyOf(digest.digest(material.getBytes(StandardCharsets.UTF_8)), 32);
+            }
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return java.util.Arrays.copyOf(digest.digest(material.getBytes(StandardCharsets.UTF_8)), 32);
+            return java.util.Arrays.copyOf(digest.digest(envKey.getBytes(StandardCharsets.UTF_8)), 32);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to resolve encryption key", e);
         }

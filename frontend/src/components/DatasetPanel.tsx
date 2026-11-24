@@ -92,7 +92,10 @@ export function DatasetPanel({
   };
 
   return (
-    <aside className="w-72 flex-shrink-0 flex flex-col h-full border-r"
+    // relative：让 busy 遮罩的 absolute inset-0 以本侧栏为定位祖先，
+    // 而不是逃逸到整个视口。/ relative anchors the busy overlay to this sidebar
+    // instead of escaping to the whole viewport.
+    <aside className="w-72 flex-shrink-0 flex flex-col h-full border-r relative"
       style={{ backgroundColor: 'var(--td-bg-color-container)', borderColor: 'var(--td-component-stroke)' }}>
       <div className="p-4 border-b" style={{ borderColor: 'var(--td-component-stroke)' }}>
         <div className="flex items-center gap-2 mb-3">

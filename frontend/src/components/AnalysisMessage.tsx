@@ -57,7 +57,10 @@ export function AnalysisMessage({ message, dark }: Props) {
           </div>
         )}
 
-        {result?.chart && result.rows.length > 0 && (
+        {/* 图表数据可能在 chart.series（新协议）或 result.rows（兜底）里，两者任一非空即可渲染。
+            / Chart rows may live in chart.series (new protocol) or fall back to result.rows;
+            render when either is non-empty. */}
+        {result?.chart && ((result.chart.series?.length ?? 0) > 0 || result.rows.length > 0) && (
           <div className="rounded-xl p-4 border"
             style={{ backgroundColor: 'var(--td-bg-color-container)', borderColor: 'var(--td-component-stroke)' }}>
             <Suspense fallback={<div className="flex justify-center py-10"><Loading /></div>}>

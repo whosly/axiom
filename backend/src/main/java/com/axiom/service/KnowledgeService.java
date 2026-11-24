@@ -206,7 +206,7 @@ public class KnowledgeService {
      * @return 成功入库条数 / Number of entries added.
      */
     public int addBatch(List<KnowledgeRequest> requests, String sourceId) {
-        int added = 0;
+        java.util.List<KnowledgeEntry> staged = new java.util.ArrayList<>();
         java.util.List<String> addedIds = new java.util.ArrayList<>();
         for (KnowledgeRequest req : requests) {
             String content = req.getContent() == null ? "" : req.getContent();
@@ -231,10 +231,30 @@ public class KnowledgeService {
                     .createdAt(now)
                     .updatedAt(now)
                     .build();
-            persistWithVector(entry);
-            addedIds.add(entry.getId());
-            added++;
+            staged.add(entry);
         }
+
+        // 批量路径：元数据逐条落库（保留单条失败粒度），向量合并为一次 upsert + 一次 flush。
+        // 逐条 persistWithVector 会对每个块各刷一次盘，百块文档导入被刷盘开销支配。
+        // / Batch path: metadata persisted per entry (keeps per-entry failure granularity),
+        // vectors merged into a single upsert + flush. Per-entry persistWithVector flushes
+        // once per chunk, which dominated bulk document import cost.
+        for (KnowledgeEntry entry : staged) {
+            repository.save(entry);
+            repository.indexTerms(entry.getId(), tokenizer.tokenize(entry.getTitle() + " " + entry.getContent()));
+        }
+        java.util.List<Boolean> vectorResults = vectorStore.upsertBatch(staged);
+        for (int i = 0; i < staged.size(); i++) {
+            KnowledgeEntry entry = staged.get(i);
+            boolean ok = i < vectorResults.size() && vectorResults.get(i);
+            // 按写入结果更新双写状态机 / Update the dual-write status machine by result.
+            String finalStatus = ok ? "ready" : "vector_failed";
+            repository.updateStatus(entry.getId(), finalStatus);
+            entry.setStatus(finalStatus);
+            addedIds.add(entry.getId());
+        }
+        int added = staged.size();
+
         if (added > 0) {
             String srcName = requests.isEmpty() ? sourceId : (requests.get(0) instanceof DocumentChunkRequest dcr
                     ? dcr.getSourceName() : sourceId);
@@ -622,7 +642,11 @@ public class KnowledgeService {
             for (byte b : bytes) sb.append(String.format("%02x", b));
             return sb.toString();
         } catch (Exception e) {
-            return UUID.randomUUID().toString();
+            // SHA-256 实际不可达；一旦发生必须显式失败，而不是返回随机 UUID——
+            // 那会让去重静默失效（每条内容都被当作"新内容"）。
+            // / SHA-256 is effectively infallible; on the impossible failure, fail loudly
+            // rather than returning a random UUID, which would silently defeat dedup.
+            throw new IllegalStateException("Failed to compute SHA-256 hash", e);
         }
     }
 }

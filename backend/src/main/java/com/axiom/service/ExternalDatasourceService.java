@@ -45,11 +45,69 @@ public class ExternalDatasourceService {
 
     /** 服务端文件/程序访问函数，SELECT 开头也无法通过其余校验 / Server-side file & program access functions. */
     private static final Pattern DANGEROUS_FUNC = Pattern.compile(
-            "\\b(pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|COPY|LOAD_FILE|"
+            "\\b(pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|LOAD_FILE|"
                     + "lo_import|lo_export|UTL_FILE|DBMS_XMLGEN|xp_cmdshell|OPENROWSET|OPENQUERY)\\b");
 
-    /** 写服务端文件的 SQL 子句 / Server-side file-write clauses (MySQL SELECT ... INTO OUTFILE). */
-    private static final Pattern INTO_FILE = Pattern.compile("\\bINTO\\s+(OUTFILE|DUMPFILE)\\b|\\bPROGRAM\\b");
+    /** PostgreSQL COPY ... FROM/TO 服务端读写语句 / PostgreSQL server-side COPY statement form. */
+    private static final Pattern COPY_STMT = Pattern.compile("\\bCOPY\\s+[\\w\".\\[\\]]+\\s+(FROM|TO)\\b");
+
+    /** 写服务端文件的 SQL 子句（OUTFILE/DUMPFILE/INTO PROGRAM）/ Server-side file-write clauses. */
+    private static final Pattern INTO_FILE = Pattern.compile("\\bINTO\\s+(OUTFILE|DUMPFILE)\\b|\\bINTO\\s+PROGRAM\\b");
+
+    /**
+     * 剥离 SQL 注释（保留字符串字面量），注释替换为单个空格以保持词边界。
+     * MySQL 词法把块注释当空白，<code>SELECT ... INTO/&minus;&minus;OUTFILE</code> 之类写法
+     * 可直接绕过正则匹配，因此所有危险模式校验必须基于剥离后的 SQL。
+     * / Strip SQL comments (string literals preserved), replacing each with a single space
+     * so word boundaries survive. MySQL lexes block comments as whitespace, letting
+     * <code>INTO/&starf;OUTFILE</code> bypass plain regex checks — all dangerous-pattern
+     * validation must therefore run on the stripped SQL.
+     */
+    private String stripSqlComments(String sql) {
+        StringBuilder out = new StringBuilder(sql.length());
+        boolean inString = false;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (inString) {
+                out.append(c);
+                if (c == '\\' && i + 1 < sql.length()) { // 反斜杠转义（MySQL）/ backslash escape.
+                    out.append(sql.charAt(++i));
+                } else if (c == '\'') {
+                    // '' 双写转义 / doubled-quote escape.
+                    if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') { out.append('\''); i++; }
+                    else inString = false;
+                }
+                continue;
+            }
+            if (c == '\'') { inString = true; out.append(c); continue; }
+            if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                out.append(' ');
+                if (end < 0) break; // 未闭合注释吞到结尾（非法 SQL 由驱动拒绝）/ unterminated: swallow rest.
+                i = end + 1;
+                continue;
+            }
+            if ((c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') || c == '#') {
+                int nl = sql.indexOf('\n', i);
+                out.append(' ');
+                if (nl < 0) break;
+                i = nl;
+                continue;
+            }
+            out.append(c);
+        }
+        return out.toString();
+    }
+
+    /**
+     * JDBC URL 危险驱动参数：本地文件读取（allowLoadLocalInfile）、反序列化 gadget
+     * （autoDeserialize）、自定义拦截器/Socket 工厂等已知攻击向量。
+     * / Dangerous JDBC driver params: local-file reads, deserialization gadgets,
+     * custom interceptors/socket factories — known attack vectors on older drivers.
+     */
+    private static final Pattern DANGEROUS_URL_PARAMS = Pattern.compile(
+            "(?i)\\b(autoDeserialize|queryInterceptors|statementInterceptors|"
+                    + "allowLoadLocalInfile|allowUrlInLocalInfile|socketFactory|sslfactory|loggerFile)\\b");
 
     /** 查询超时（秒）/ Query timeout in seconds. */
     private static final int QUERY_TIMEOUT_SECONDS = 30;
@@ -68,6 +126,10 @@ public class ExternalDatasourceService {
      */
     public ExternalDatasource register(String name, String type, String jdbcUrl,
                                        String username, String password) {
+        // 入口即校验：非法/危险 URL 在注册阶段直接拒绝，而不是等到查询时才失败。
+        // / Validate at the entry point: bad URLs are rejected at registration, not deferred
+        // to query time.
+        validateJdbcUrl(type, jdbcUrl);
         ExternalDatasource ds = new ExternalDatasource();
         ds.setId(UUID.randomUUID().toString());
         ds.setName(name);
@@ -122,7 +184,11 @@ public class ExternalDatasourceService {
     public Map<String, Object> importQuery(String id, String sql, int limit, String name) throws Exception {
         ExternalDatasource ds = require(id);
         String safeSql = sql == null ? "" : sql.trim().replaceAll(";\\s*$", "");
-        String upper = safeSql.toUpperCase();
+        // 校验基于剥离注释后的 SQL：块注释在 MySQL 词法中等价于空白，
+        // 不剥离则 INTO/**/OUTFILE 可穿透全部正则防线。
+        // / Validate the comment-stripped SQL: block comments lex as whitespace in MySQL,
+        // so without stripping INTO/**/OUTFILE sails through every regex guard.
+        String upper = stripSqlComments(safeSql).trim().toUpperCase();
         // 只读校验：拒绝非 SELECT/WITH/SHOW，拒绝分号后跟写操作 / Read-only guard.
         if (!(upper.startsWith("SELECT") || upper.startsWith("WITH") || upper.startsWith("SHOW"))) {
             throw new IllegalArgumentException("仅允许只读查询（SELECT/WITH/SHOW）/ Only read-only queries allowed");
@@ -137,15 +203,13 @@ public class ExternalDatasourceService {
         // 服务端文件读写的内置函数（SELECT pg_read_file(...)、INTO OUTFILE/LOAD_FILE）必须显式拒绝：
         // 它们以 SELECT 开头，前缀与写关键字校验都拦不住。/ Server-side file access functions start
         // with SELECT and pass every keyword guard; they must be denied explicitly.
-        if (DANGEROUS_FUNC.matcher(upper).find() || INTO_FILE.matcher(upper).find()) {
+        if (DANGEROUS_FUNC.matcher(upper).find() || COPY_STMT.matcher(upper).find()
+                || INTO_FILE.matcher(upper).find()) {
             throw new IllegalArgumentException("查询包含被禁止的服务端文件访问函数 / Server-side file access is forbidden");
         }
-        // 连接 URL 白名单：仅允许 mysql/postgresql 协议，阻断自定义协议处理器的
-        // SSRF / 参数注入面。/ Protocol allowlist blocks custom JDBC handler SSRF/injection.
-        String url = ds.getJdbcUrl() == null ? "" : ds.getJdbcUrl().toLowerCase();
-        if (!(url.startsWith("jdbc:mysql:") || url.startsWith("jdbc:postgresql:"))) {
-            throw new IllegalArgumentException("仅支持 jdbc:mysql / jdbc:postgresql 连接 / Only mysql/postgresql URLs allowed");
-        }
+        // 连接 URL 白名单 + 危险参数拦截（查询路径的最后防线）。
+        // / URL allowlist + dangerous-param rejection (final guard for the query path).
+        validateJdbcUrl(ds.getType(), ds.getJdbcUrl());
 
         List<String> headers = new ArrayList<>();
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -160,6 +224,10 @@ public class ExternalDatasourceService {
             }
             try (PreparedStatement ps = conn.prepareStatement(safeSql)) {
                 ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                // 驱动层截断结果集：limit 只在 Java 侧生效时，大表仍会全量传输占满超时窗口。
+                // / Driver-side row cap: without it the full result set streams over the wire
+                // even though only `limit` rows are kept.
+                ps.setMaxRows(Math.max(1, Math.min(limit, 10000)));
                 try (ResultSet rs = ps.executeQuery()) {
                     ResultSetMetaData md = rs.getMetaData();
                     int cols = md.getColumnCount();
@@ -202,6 +270,37 @@ public class ExternalDatasourceService {
         return Map.of("datasetId", dataset.getId(), "rows", rows.size(), "columns", headers.size());
     }
 
+    /**
+     * 校验 JDBC URL：协议白名单 + 类型一致性 + 必须是网络 URL + 危险驱动参数拦截。
+     * register/connect/importQuery 三个入口统一调用，避免只保护查询路径。
+     * / Validates the JDBC URL: protocol allowlist, type consistency, network-URL form and
+     * dangerous driver params. Called from register/connect/importQuery so every entry
+     * point is protected, not just the query path.
+     */
+    private void validateJdbcUrl(String type, String jdbcUrl) {
+        String expectedPrefix = switch (type == null ? "" : type.toLowerCase()) {
+            case "mysql" -> "jdbc:mysql:";
+            case "postgresql", "postgres" -> "jdbc:postgresql:";
+            default -> throw new IllegalArgumentException("不支持的数据源类型 / Unsupported type: " + type);
+        };
+        String url = jdbcUrl == null ? "" : jdbcUrl.trim();
+        String lower = url.toLowerCase();
+        if (!lower.startsWith(expectedPrefix)) {
+            throw new IllegalArgumentException("仅支持 jdbc:mysql / jdbc:postgresql 连接 / Only mysql/postgresql URLs allowed");
+        }
+        // 必须是网络 URL（含 //host 部分），排除 jdbc:mysql:file: 之类的变体协议。
+        // / Must be a network URL (contains //host) to exclude exotic sub-protocols.
+        if (!lower.startsWith(expectedPrefix + "//")) {
+            throw new IllegalArgumentException("JDBC URL 必须包含主机部分（jdbc:...://host/...）/ URL must include a host section");
+        }
+        // 危险驱动参数（反序列化/本地文件读取/自定义拦截器）一律拒绝。
+        // / Reject dangerous driver params (deserialization, local infile, interceptors).
+        String query = url.contains("?") ? url.substring(url.indexOf('?') + 1) : "";
+        if (!query.isEmpty() && DANGEROUS_URL_PARAMS.matcher(query).find()) {
+            throw new IllegalArgumentException("JDBC URL 包含被禁止的驱动参数 / URL contains forbidden driver parameters");
+        }
+    }
+
     /** 建立 JDBC 连接 / Establish a JDBC connection. */
     private Connection connect(ExternalDatasource ds) throws SQLException {
         String driver = switch (ds.getType()) {
@@ -209,6 +308,9 @@ public class ExternalDatasourceService {
             case "postgresql", "postgres" -> "org.postgresql.Driver";
             default -> throw new IllegalArgumentException("不支持的数据源类型 / Unsupported type: " + ds.getType());
         };
+        // 建连前再校验一次（历史数据可能注册于校验加入之前）。
+        // / Validate again before connecting (legacy rows may predate the validation).
+        validateJdbcUrl(ds.getType(), ds.getJdbcUrl());
         try {
             Class.forName(driver);
         } catch (ClassNotFoundException e) {

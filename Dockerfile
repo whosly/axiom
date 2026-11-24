@@ -46,8 +46,17 @@ COPY backend/pom.xml ./backend/pom.xml
 COPY backend/src ./backend/src
 COPY --from=frontend-builder /build/frontend/dist ./backend/src/main/resources/static
 
-# 构建 jar（跳过测试）/ Build executable jar
-RUN cd backend && mvn -q clean package -DskipTests
+# 构建 jar（跳过测试）并归一化产物名：
+# -Dspring-boot.repackage.skip=false 不需要，spring-boot repackage 默认开启；
+# mvn 会产出 axiom-<version>.jar 与 axiom-<version>.jar.original 两个文件，
+# 直接在构建阶段复制为固定名 /app.jar，运行时镜像不再与 pom 版本号双写——
+# 升级 pom version 不需要同步修改 Dockerfile。/ Normalize the artifact name in the
+# builder stage: mvn emits both axiom-<version>.jar and .jar.original, so we copy the
+# packaged jar to a fixed /app.jar here. The runtime stage no longer hardcodes the
+# version, so bumping the pom version never breaks the Docker build.
+RUN cd backend && mvn -q clean package -DskipTests \
+    && JAR=$(ls target/axiom-*.jar | grep -v '\.original$' | head -n 1) \
+    && cp "$JAR" /build/app.jar
 
 # ============ Stage 3: Runtime ============
 FROM ${JRE_IMAGE} AS runtime
@@ -66,8 +75,8 @@ RUN groupadd -r axiom && useradd -r -g axiom axiom \
     && mkdir -p /app/data && chown -R axiom:axiom /app
 USER axiom
 
-# 复制可执行 jar / Copy executable jar
-COPY --from=backend-builder /build/backend/target/axiom-1.0.0.jar /app/app.jar
+# 复制可执行 jar（构建阶段已归一化为固定名，见 backend-builder / normalized in builder stage）
+COPY --from=backend-builder /build/app.jar /app/app.jar
 
 # 创建数据目录结构 / Create data directories
 RUN mkdir -p /app/data/h2 /app/data/duckdb /app/data/sqlite /app/data/zvec /app/data/models/bge-small-zh-v1.5
@@ -93,7 +102,7 @@ LABEL org.opencontainers.image.title="Axiom" \
 # 环境变量：容器内路径 / Container paths
 ENV DATA_DIR=/app/data \
     DUCKDB_PATH=/app/data/duckdb/analysis.duckdb \
-    H2_URL='jdbc:h2:file:/app/data/h2/metadata;AUTO_SERVER=TRUE' \
+    H2_URL='jdbc:h2:file:/app/data/h2/metadata' \
     SQLITE_URL='jdbc:sqlite:/app/data/sqlite/metadata.db' \
     ZVEC_PATH=/app/data/zvec/dataset_semantics \
     ZVEC_KNOWLEDGE_PATH=/app/data/zvec/knowledge_base_v2 \

@@ -54,7 +54,15 @@ public class LlmConfigStore {
             if (p.provider != null && !p.provider.isBlank()) props.getLlm().setProvider(p.provider);
             if (p.providers != null) {
                 p.providers.forEach((name, cfg) -> {
-                    if (cfg != null) props.getLlm().config(name).mergeFrom(cfg);
+                    if (cfg != null) {
+                        // 旧版本曾把 apiKey 明文落盘：加载时一律丢弃文件中的密钥，
+                        // 防止历史残留凭据经 mergeFrom 重新注入内存，维持「密钥只来自 env/yml」的承诺。
+                        // / Older versions persisted apiKey in plaintext; always drop it on load so
+                        // stale credentials are never re-injected via mergeFrom and keys keep coming
+                        // from env/yml only.
+                        cfg.setApiKey(null);
+                        props.getLlm().config(name).mergeFrom(cfg);
+                    }
                 });
             }
             log.info("[LLMConfig] loaded persisted config from {} (provider={})", file, props.getLlm().getProvider());

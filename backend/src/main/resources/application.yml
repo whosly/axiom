@@ -23,7 +23,9 @@ app:
     duckdb-path: ${DUCKDB_PATH:./data/duckdb/analysis.duckdb}
     # h2 | sqlite
     metadata-type: ${METADATA_TYPE:h2}
-    h2-url: ${H2_URL:jdbc:h2:file:./data/h2/metadata;AUTO_SERVER=TRUE}
+    # 不开启 AUTO_SERVER：单进程嵌入式使用，开启会在本机额外监听 TCP 端口扩大攻击面。
+    # / No AUTO_SERVER: single embedded process; enabling it opens an extra local TCP port.
+    h2-url: ${H2_URL:jdbc:h2:file:./data/h2/metadata}
     sqlite-url: ${SQLITE_URL:jdbc:sqlite:./data/sqlite/metadata.db}
     username: ${DB_USER:sa}
     password: ${DB_PASSWORD:}

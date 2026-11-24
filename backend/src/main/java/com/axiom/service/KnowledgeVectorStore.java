@@ -35,6 +35,9 @@ import java.util.List;
 @Service
 public class KnowledgeVectorStore {
 
+    /** 批量写入分片大小：每片一次 upsert+flush，控制 native 内存峰值 / Shard size for batch upsert. */
+    private static final int UPSERT_BATCH_SHARD = 200;
+
     /** Zvec Collection 对象，对应 knowledge_base / Zvec collection for knowledge_base. */
     private Collection collection;
 
@@ -173,21 +176,8 @@ public class KnowledgeVectorStore {
         // Docs use native memory; hold in a local and free in finally so exception paths cannot leak.
         List<Doc> docs = null;
         try {
-            float[] vector = alignDimension(embeddingFactory.current().embed(entry.getContent()));
-
-            Doc doc = new Doc();
-            doc.setPK(entry.getId());
-            doc.addStringField("kind", nullToEmpty(entry.getKind()));
-            doc.addStringField("title", nullToEmpty(entry.getTitle()));
-            doc.addStringField("content", entry.getContent());
-            doc.addStringField("sourceId", nullToEmpty(entry.getSourceId()));
-            doc.addStringField("datasetId", nullToEmpty(entry.getDatasetId()));
-            doc.addStringField("tags", String.join(",", entry.getTags() == null ? List.of() : entry.getTags()));
-            doc.addInt32Field("chunkIndex", entry.getChunkIndex());
-            doc.addVectorFP32Field("embedding", vector);
-
             docs = new ArrayList<>();
-            docs.add(doc);
+            docs.add(buildDoc(entry));
             synchronized (zvecLock) {
                 collection.upsert(docs);
                 collection.flush();
@@ -202,13 +192,80 @@ public class KnowledgeVectorStore {
     }
 
     /**
+     * 构建单条向量文档（embed + 字段填充）/ Build a single vector doc (embed + field mapping).
+     * 单条与批量写入共用，保证字段映射一致。/ Shared by single and batch writes so field
+     * mapping can never drift between the two paths.
+     */
+    private Doc buildDoc(KnowledgeEntry entry) {
+        float[] vector = alignDimension(embeddingFactory.current().embed(entry.getContent()));
+        Doc doc = new Doc();
+        doc.setPK(entry.getId());
+        doc.addStringField("kind", nullToEmpty(entry.getKind()));
+        doc.addStringField("title", nullToEmpty(entry.getTitle()));
+        doc.addStringField("content", entry.getContent());
+        doc.addStringField("sourceId", nullToEmpty(entry.getSourceId()));
+        doc.addStringField("datasetId", nullToEmpty(entry.getDatasetId()));
+        doc.addStringField("tags", String.join(",", entry.getTags() == null ? List.of() : entry.getTags()));
+        doc.addInt32Field("chunkIndex", entry.getChunkIndex());
+        doc.addVectorFP32Field("embedding", vector);
+        return doc;
+    }
+
+    /**
      * 批量写入知识条目 / Batch upsert knowledge entries.
      *
+     * <p>分片批量路径：按 {@value #UPSERT_BATCH_SHARD} 条一片，锁外逐条 embed + 构建 Doc
+     * （构建失败的条目单独标记 false），每片一次 upsert + 一次 flush，随后立即释放 native
+     * 内存。整批驻留会让千块级导入的 Doc（全文 + FP32 向量）峰值不受控；分片让内存占用恒定，
+     * 且单分片失败不影响其他分片。
+     * / Sharded batch path: per {@value #UPSERT_BATCH_SHARD}-entry shard, embed + build docs
+     * outside the lock (build failures marked false individually), one upsert + one flush,
+     * then free native memory immediately. Holding the whole batch resident would make peak
+     * memory unbounded for thousand-chunk imports; sharding keeps it constant, and a shard
+     * failure no longer poisons the rest.
+     *
      * @param entries 条目列表 / List of entries.
+     * @return 与 entries 对齐的写入结果（true=成功）/ Results aligned with entries (true=written).
      */
-    public void upsertBatch(List<KnowledgeEntry> entries) {
-        if (!ready || entries == null || entries.isEmpty()) return;
-        for (KnowledgeEntry entry : entries) upsert(entry);
+    public List<Boolean> upsertBatch(List<KnowledgeEntry> entries) {
+        if (!ready || entries == null || entries.isEmpty()) return List.of();
+        List<Boolean> results = new ArrayList<>(Collections.nCopies(entries.size(), false));
+        for (int start = 0; start < entries.size(); start += UPSERT_BATCH_SHARD) {
+            int end = Math.min(start + UPSERT_BATCH_SHARD, entries.size());
+            List<Doc> docs = new ArrayList<>();
+            List<Integer> builtIdx = new ArrayList<>();
+            for (int i = start; i < end; i++) {
+                KnowledgeEntry entry = entries.get(i);
+                if (entry.getContent() == null || entry.getContent().isBlank()) continue;
+                try {
+                    docs.add(buildDoc(entry));
+                    builtIdx.add(i);
+                } catch (Exception e) {
+                    log.warn("[KnowledgeVector] batch build failed for {}: {}", entry.getId(), e.getMessage());
+                }
+            }
+            try {
+                if (!docs.isEmpty()) {
+                    synchronized (zvecLock) {
+                        collection.upsert(docs);
+                        collection.flush();
+                    }
+                    // 本片写入成功：仅构建成功的条目置 true，空白/构建失败保持 false。
+                    // / Shard written: only build-time successes flip to true;
+                    // blank or failed entries stay false.
+                    for (int i : builtIdx) results.set(i, true);
+                }
+            } catch (Exception e) {
+                log.warn("[KnowledgeVector] batch upsert failed for shard [{},{}): {}",
+                        start, end, e.getMessage());
+                // 本片失败保持 false，由上层状态机标记 vector_failed 供 reindex 收敛。
+                // / Failed shard stays false; the upper status machine flags vector_failed
+                // and a later reindex converges.
+            } finally {
+                if (!docs.isEmpty()) Doc.freeDocs(docs);
+            }
+        }
+        return results;
     }
 
     /**
@@ -341,8 +398,13 @@ public class KnowledgeVectorStore {
     public VectorStatus vectorStatus(String id) {
         if (!ready) return new VectorStatus(false, 0, 0);
         try {
-            // fetch 返回存在的文档；不存在则返回空列表 / fetch returns existing docs; empty if absent.
-            List<Doc> docs = collection.fetch(List.of(id));
+            // fetch 同样操作 native 对象，必须与其他 upsert/delete/query 一样持锁串行，
+            // 避免与并发 flush 产生 native 竞态。/ fetch touches native objects too and must
+            // run under the same serializing lock as upsert/delete/query.
+            List<Doc> docs;
+            synchronized (zvecLock) {
+                docs = collection.fetch(List.of(id));
+            }
             try {
                 if (docs.isEmpty()) return new VectorStatus(false, 0, 0);
                 Doc d = docs.get(0);

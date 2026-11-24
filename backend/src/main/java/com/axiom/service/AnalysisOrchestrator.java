@@ -190,6 +190,23 @@ public class AnalysisOrchestrator {
     /** Step 3: turn result into a readable conclusion (optionally streamed). */
     public String conclude(Dataset dataset, String question, AnalysisPlan plan,
                            AnalysisResult result, Consumer<String> tokenConsumer) {
+        return conclude(dataset, question, plan, result, tokenConsumer, null);
+    }
+
+    /**
+     * 带取消信号的结论生成 / Conclusion generation with a cancellation signal.
+     *
+     * <p>cancelled 置位后 collector 抛 {@link java.util.concurrent.CancellationException}，
+     * 异常穿透 chatStream 的读循环并触发其 try-with-resources 关闭 HTTP 响应——
+     * 这是真正中断 LLM 服务端流式生成的唯一手段，仅靠「不消费 token」费用照烧。
+     * Once cancelled, the collector throws {@link java.util.concurrent.CancellationException};
+     * it unwinds chatStream's read loop and closes the HTTP response via try-with-resources —
+     * the only way to actually stop server-side generation (merely ignoring tokens still
+     * burns the full cost).
+     */
+    public String conclude(Dataset dataset, String question, AnalysisPlan plan,
+                           AnalysisResult result, Consumer<String> tokenConsumer,
+                           java.util.concurrent.atomic.AtomicBoolean cancelled) {
         if (!llmAvailable()) {
             String fallback = rulePlanner.conclude(dataset, question, plan, result);
             if (tokenConsumer != null) {
@@ -230,7 +247,16 @@ public class AnalysisOrchestrator {
         String model = llm.chatModel();
         ChatOptions options = options(llm, 0.3, 1024, false);
         StringBuilder full = new StringBuilder();
-        Consumer<String> collector = token -> { full.append(token); if (tokenConsumer != null) tokenConsumer.accept(token); };
+        Consumer<String> collector = token -> {
+            // 取消即中断：抛异常打断底层读循环并关闭流，而不是只在消费侧静默丢弃。
+            // / Throwing on cancellation interrupts the underlying read loop and closes
+            // the stream, instead of silently dropping tokens on the consumer side.
+            if (cancelled != null && cancelled.get()) {
+                throw new java.util.concurrent.CancellationException("client disconnected");
+            }
+            full.append(token);
+            if (tokenConsumer != null) tokenConsumer.accept(token);
+        };
 
         try {
             if (tokenConsumer != null) {
@@ -238,6 +264,10 @@ public class AnalysisOrchestrator {
             } else {
                 collector.accept(llm.chat(List.of(ChatMessage.user(context.toString())), options));
             }
+        } catch (java.util.concurrent.CancellationException e) {
+            // 客户端已断开：不做规则降级（结论不会被任何人消费），保留已生成的部分即可。
+            // / Client is gone: no rule fallback (nobody will consume it); keep partial text.
+            log.info("[Conclude] cancelled by client, {} chars generated", full.length());
         } catch (Exception e) {
             // plan 有降级路径，conclude 也必须有；否则流式场景会把半截 LLM 文本当最终结论。
             // 已推送部分 token 时明确标记中断，再补一段规则结论；一个 token 都没有则直接用规则结论。

@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Button, Input, Textarea, Select, Tag, Dialog, Loading, Tooltip } from 'tdesign-react';
 import { AddIcon, SearchIcon, DeleteIcon, BookIcon, BrowseIcon, RefreshIcon } from 'tdesign-icons-react';
 import { api } from '../api';
-import type { KnowledgeEntry, KnowledgeHit, KnowledgeInput } from '../types';
+import type { KnowledgeEntry, KnowledgeHit, KnowledgeInput, KnowledgeDetail } from '../types';
 import { KIND_LABELS } from '../types';
 // 图谱视图依赖 ECharts，按需加载避免进入首屏 bundle / Lazy-load the ECharts-based graph view.
 const KnowledgeGraphView = lazy(() => import('./KnowledgeGraphView').then(m => ({ default: m.KnowledgeGraphView })));
@@ -35,8 +35,12 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const [hits, setHits] = useState<KnowledgeHit[] | null>(null);
   const [busy, setBusy] = useState(false);
   // 详情抽屉状态 / Detail drawer state
-  const [detail, setDetail] = useState<Record<string, any> | null>(null);
+  const [detail, setDetail] = useState<KnowledgeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // 详情弹窗开关与数据分离：加载中弹窗保持打开（无需 {} as KnowledgeDetail 占位）。
+  // / Dialog open flag decoupled from data: the dialog stays visible while loading,
+  // no `{} as KnowledgeDetail` placeholder needed.
+  const [detailOpen, setDetailOpen] = useState(false);
   // 视图切换：entries | graph | zvec / View switcher
   const [view, setView] = useState<'entries' | 'graph' | 'zvec' | 'sources'>('entries');
   // 图谱子视图：可视化 / 推理 / Graph sub-view: visualization or reasoning
@@ -46,20 +50,43 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   const [statusStats, setStatusStats] = useState<Array<Record<string, unknown>>>([]);
   const [reindexing, setReindexing] = useState(false);
 
+  // 请求序号守卫：并发 refresh（上传后/重建后/手动/切换数据集）只让最新一次生效，
+  // 慢的旧响应直接丢弃，避免乱序覆盖。/ Sequence guard: only the latest refresh wins.
+  const refreshSeq = useRef(0);
+
   const refresh = async () => {
+    const seq = ++refreshSeq.current;
     setLoading(true);
     try {
-      setEntries((await api.listKnowledge()).entries);
-      // 向量状态统计与条目列表并行刷新；H2 返回大写键 STATUS/COUNT，需兼容读取
-      // Refresh vector status alongside entries; H2 returns uppercase STATUS/COUNT keys.
+      const entries = (await api.listKnowledge()).entries;
+      // 过期响应（已被更新的请求超越）直接丢弃 / Drop stale responses.
+      if (seq !== refreshSeq.current) return;
+      // 条目列表先落地：状态统计失败不应连累已到手的条目不渲染。
+      // / Land the entries first: a status-statistics failure must not withhold
+      // the already-fetched entry list from rendering.
+      setEntries(entries);
+    } catch (e) {
+      console.error(e);
+      if (seq === refreshSeq.current) setLoading(false);
+      return;
+    }
+    try {
+      // 向量状态统计；H2 返回大写键 STATUS/COUNT，需兼容读取
+      // / Vector status; H2 returns uppercase STATUS/COUNT keys.
       const status = await api.knowledgeStatus();
+      if (seq !== refreshSeq.current) return;
       const raw = (status.statuses || status.stats || status.status || []) as Array<Record<string, unknown>>;
-      setStatusStats(raw.map(s => ({
+      // Array.isArray 防御：兼容字段最终落到非数组对象时静默降级，而不是抛错吞掉状态条。
+      // / Defensive Array.isArray: degrade silently instead of throwing and losing the bar.
+      setStatusStats(Array.isArray(raw) ? raw.map(s => ({
         status: s.status ?? s.STATUS,
         count: s.count ?? s.COUNT,
-      })));
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+      })) : []);
+    } catch (e) {
+      // 状态统计独立失败只降级状态条 / A stats-only failure degrades just the status bar.
+      console.error(e);
+    }
+    finally { if (seq === refreshSeq.current) setLoading(false); }
   };
 
   /** 上传文档入库并刷新 / Ingest an uploaded document and refresh. */
@@ -84,7 +111,10 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
     finally { setReindexing(false); }
   };
 
-  useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // datasetId 变化时重新刷新：上传/检索都作用在当前数据集语境上，
+  // 切换数据集后列表与向量状态需与语境一致。/ Reload when the dataset changes so
+  // entries and vector status stay consistent with the active dataset context.
+  useEffect(() => { refresh(); }, [datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async () => {
     if (!form.title.trim() || !form.content.trim()) return;
@@ -119,12 +149,27 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
   };
 
   // 打开详情：加载元数据+向量状态+处理链路 / Open detail: load metadata + vector status + lineage
+  // 详情请求序号：快速连点两条知识时，慢的旧响应不得覆盖新响应、不得提前关闭 Loading。
+  // / Detail sequence guard: a slow stale response must never overwrite the latest
+  // click's data or hide the loading spinner prematurely.
+  const detailSeq = useRef(0);
+
   const openDetail = async (id: string) => {
+    const seq = ++detailSeq.current;
+    setDetailOpen(true);
     setDetailLoading(true);
-    setDetail({} as Record<string, any>);
-    try { setDetail(await api.getKnowledgeDetail(id)); }
-    catch (e) { notifyError('加载详情失败: ' + (e as Error).message); setDetail(null); }
-    finally { setDetailLoading(false); }
+    setDetail(null);
+    try {
+      const d = await api.getKnowledgeDetail(id);
+      if (seq !== detailSeq.current) return;
+      setDetail(d);
+    } catch (e) {
+      if (seq !== detailSeq.current) return;
+      notifyError('加载详情失败: ' + (e as Error).message);
+      setDetailOpen(false);
+    } finally {
+      if (seq === detailSeq.current) setDetailLoading(false);
+    }
   };
 
   return (
@@ -283,8 +328,8 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
       </Dialog>
 
       {/* 详情抽屉 / Detail dialog: metadata + vector status + lineage */}
-      <Dialog header="知识详情 / Knowledge Detail" visible={detail !== null}
-        onClose={() => setDetail(null)} footer={false} width={720}>
+      <Dialog header="知识详情 / Knowledge Detail" visible={detailOpen}
+        onClose={() => { setDetailOpen(false); setDetail(null); }} footer={false} width={720}>
         {detailLoading ? <div className="flex justify-center py-16"><Loading /></div> : detail && (
           <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
             {/* 基本信息 / Basic info */}
@@ -317,9 +362,9 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
                   </code>
                 </div>
               )}
-              {detail.entry?.fields?.length > 0 && (
+              {(detail.entry?.fields?.length ?? 0) > 0 && (
                 <div className="mt-2 flex gap-1 flex-wrap">
-                  {detail.entry.fields.map((f: string) => <Tag key={f} size="small" variant="outline">{f}</Tag>)}
+                  {detail.entry?.fields?.map(f => <Tag key={f} size="small" variant="outline">{f}</Tag>)}
                 </div>
               )}
             </section>
@@ -344,7 +389,7 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
             <section>
               <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--td-brand-color)' }}>处理链路 / Processing Lineage</h4>
               <div className="space-y-1.5">
-                {(detail.lineage || []).map((s: any, i: number) => (
+                {(detail.lineage || []).map((s, i) => (
                   <div key={i} className="flex gap-2 text-xs items-start p-2 rounded-lg"
                     style={{ backgroundColor: 'var(--td-bg-color-component)' }}>
                     <Tag size="small" theme="primary" variant="light">{s.step}</Tag>
@@ -372,7 +417,7 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
 }
 
 /** 详情字段展示 / Detail field renderer. */
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value }: { label: string; value?: string }) {
   return (
     <div className="truncate" title={value}>
       <span style={{ color: 'var(--td-text-color-secondary)' }}>{label}: </span>

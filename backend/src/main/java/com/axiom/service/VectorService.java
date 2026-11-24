@@ -3,6 +3,7 @@ package com.axiom.service;
 import com.axiom.config.AppProperties;
 import com.axiom.embedding.EmbeddingProviderFactory;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +15,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 数据集语义向量服务 / Dataset-semantics vector service.
@@ -40,7 +40,6 @@ public class VectorService {
 
     private Collection collection;
     private boolean ready = false;
-    private final Map<String, List<String>> trackedIds = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * Zvec native Collection 的调用串行锁 / Serializes all native Collection calls.
      *
@@ -99,7 +98,14 @@ public class VectorService {
         }
     }
 
-    /** 仅关闭本服务持有的 collection；runtime 关闭由 ZvecLifecycle 负责 / Close only this collection; runtime shutdown is owned by ZvecLifecycle. */
+    /**
+     * 关闭本服务持有的 collection / Close the collection owned by this service.
+     * <p>runtime 级关闭由 ZvecLifecycle 负责，但 dataset_semantics collection 是本服务
+     * 独立打开的，必须自己释放，否则进程退出时 native 句柄泄漏、flush 无保证。
+     * / Runtime-level shutdown stays with ZvecLifecycle, but the dataset_semantics
+     * collection is opened here and must be released by us.
+     */
+    @PreDestroy
     public void shutdown() {
         if (collection != null) {
             try { collection.close(); } catch (Exception ignored) {}
@@ -135,9 +141,6 @@ public class VectorService {
                 collection.upsert(docs);
                 collection.flush();
             }
-            // 同步包装：同一 refId 的并发 upsert 会 add 到同一列表。
-            // Synchronized list: concurrent upserts append to the same per-refId list.
-            trackedIds.computeIfAbsent(refId, k -> java.util.Collections.synchronizedList(new ArrayList<>())).add(id);
         } catch (Exception e) {
             log.warn("[Zvec] upsert failed for {}: {}", id, e.getMessage());
         } finally {
@@ -242,8 +245,6 @@ public class VectorService {
             }
         } catch (Exception e) {
             log.warn("[Zvec] delete failed for {}: {}", refId, e.getMessage());
-        } finally {
-            trackedIds.remove(refId);
         }
     }
 

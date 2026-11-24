@@ -14,13 +14,19 @@ const PALETTE = ['#0052d9', '#00a870', '#ed7b2f', '#8e56ff', '#e34d59', '#0594fa
 const fmtNum = (v: number): string =>
   Number.isFinite(v) ? v.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : String(v);
 
+/** 模块级兜底常量：组件内字面量每次渲染都是新引用，会令 useMemo 缓存失效。
+ * / Module-level fallback constants: inline literals are a new reference per render
+ * and would invalidate the useMemo cache every render. */
+const EMPTY_ROWS: Array<Record<string, unknown>> = [];
+const DEFAULT_YFIELDS = ['value'];
+
 export function AnalysisChart({ chart, dark }: Props) {
-  const rows = chart.series || [];
+  const rows = chart.series || EMPTY_ROWS;
   // tolerate both camelCase and all-lowercase field names from different serializers
   const c = chart as unknown as Record<string, unknown>;
   const xField = chart.xField || (c.xfield as string) || '';
   const yFieldsRaw = chart.yFields || (c.yfields as string[]);
-  const yFields = yFieldsRaw?.length ? yFieldsRaw : ['value'];
+  const yFields = yFieldsRaw?.length ? yFieldsRaw : DEFAULT_YFIELDS;
 
   const option = useMemo(() => {
     const textColor = dark ? '#a3a3a3' : '#737373';
@@ -59,10 +65,19 @@ export function AnalysisChart({ chart, dark }: Props) {
 
     // ---- line：rows 带 dimension 时按维度拆成多序列（如"各产品每月趋势"）----
     if (chart.type === 'line') {
-      const hasDimension = rows.length > 0 && 'dimension' in rows[0] && xField !== 'dimension';
+      // any 行带 dimension 即视为维度序列，只看首行会误判混合行数据。
+      // / Any row carrying a dimension makes it a multi-series chart; checking only
+      // rows[0] misjudges mixed rows.
+      const hasDimension = rows.length > 0 && rows.some(r => 'dimension' in r) && xField !== 'dimension';
       const xData = Array.from(new Set(rows.map(r => String(r[xField] ?? ''))));
       if (hasDimension) {
-        const dims = Array.from(new Set(rows.map(r => String(r.dimension))));
+        const dims = Array.from(new Set(rows.map(r => String(r.dimension ?? ''))));
+        // 预建 (x, dimension) -> 行 的索引，替代 O(n²) 的 rows.find。
+        // / Prebuild an (x, dimension) -> row index instead of O(n²) rows.find.
+        const rowIndex = new Map<string, Record<string, unknown>>();
+        for (const r of rows) {
+          rowIndex.set(String(r[xField] ?? '') + '\u0000' + String(r.dimension ?? ''), r);
+        }
         const series = dims.map((dim, idx) => ({
           name: dim,
           type: 'line',
@@ -73,9 +88,15 @@ export function AnalysisChart({ chart, dark }: Props) {
           // 每个维度只取自己的行，按 xData 顺序对齐（缺失期为 null，ECharts 断点显示）
           // / Only this dimension's rows, aligned to xData; missing periods render as gaps.
           data: xData.map(x => {
-            const row = rows.find(r => String(r[xField]) === x && String(r.dimension) === dim);
+            // 与 xData 相同的归一（?? ''）：两侧不一致时 null 值永远匹配不上，渲染成断点。
+            // / Same normalization as xData (?? ''); mismatched normalization turns null
+            // values into permanent lookup misses and broken gaps.
+            const row = rowIndex.get(x + '\u0000' + dim);
+            // 缺失行的 null 语义由 row 判空保证，Number() 永不返回 null，只需判有限性。
+            // / Missing rows are null via the row check; Number() never returns null,
+            // so only finiteness needs checking.
             const v = row ? Number(row[yFields[0]] ?? 0) : null;
-            return v !== null && Number.isFinite(v) ? v : null;
+            return Number.isFinite(v) ? v : null;
           }),
         }));
         return {

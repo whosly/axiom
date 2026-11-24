@@ -1,4 +1,8 @@
-import type { Dataset, ChatSession, SSEEvent, KnowledgeEntry, KnowledgeInput, KnowledgeHit } from './types';
+import type {
+  Dataset, ChatSession, SSEEvent, KnowledgeEntry, KnowledgeInput, KnowledgeHit,
+  KnowledgeDetail, GraphPayload, GraphNeighborsPayload, GraphCommunity, GraphPathResult,
+  GraphRelatedItem, ZvecCollection, ZvecDoc,
+} from './types';
 import { parseSSEBlock } from './sse';
 
 const BASE = '/api';
@@ -46,8 +50,8 @@ export const api = {
       body: JSON.stringify({ query, kind, topK, datasetId }),
     })).hits,
 
-  getKnowledgeDetail: async (id: string): Promise<Record<string, unknown>> =>
-    (await json<{ detail: Record<string, unknown> }>(`/knowledge/${id}/detail`)).detail,
+  getKnowledgeDetail: async (id: string): Promise<KnowledgeDetail> =>
+    (await json<{ detail: KnowledgeDetail }>(`/knowledge/${id}/detail`)).detail,
 
   // 上传文档入库（PDF/DOCX/MD/TXT）/ Ingest a document into the knowledge base
   ingestDocument: async (file: File, datasetId?: string): Promise<Record<string, unknown>> => {
@@ -62,23 +66,21 @@ export const api = {
     json<Record<string, unknown>>(`/knowledge/reindex?force=${force}`, { method: 'POST' }),
 
   // ---- 知识图谱 / Knowledge graph ----
-  getGraph: () => json<Record<string, unknown>>('/knowledge/graph'),
+  getGraph: () => json<GraphPayload>('/knowledge/graph'),
   rebuildGraph: () => json<Record<string, unknown>>('/knowledge/graph/rebuild', { method: 'POST' }),
   graphNeighbors: (nodeId: string, hops = 1) =>
-    json<Record<string, unknown>>(`/knowledge/graph/neighbors?nodeId=${encodeURIComponent(nodeId)}&hops=${hops}`),
+    json<GraphNeighborsPayload>(`/knowledge/graph/neighbors?nodeId=${encodeURIComponent(nodeId)}&hops=${hops}`),
 
   // 图谱推理 / Graph reasoning
   graphCommunities: (maxIterations = 20) =>
-    json<{ communities: Array<{ size: number; members: Array<{ id: string; label: string }>;
-      typeDistribution: Record<string, number> }>; count: number; iterations: number;
+    json<{ communities: GraphCommunity[]; count: number; iterations: number;
       sampled?: boolean; totalNodes?: number; analyzedNodes?: number; version?: number }>(
       `/knowledge/graph/reason/communities?maxIterations=${maxIterations}`),
   graphPath: (from: string, to: string) =>
-    json<{ path: Array<{ id: string; label: string; type: string }>; length: number; reachable: boolean;
-      message?: string }>(
+    json<GraphPathResult>(
       `/knowledge/graph/reason/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   graphRelated: (entryId: string, limit = 10) =>
-    json<{ related: Array<{ id: string; label: string; sharedRelations: number }>; count: number }>(
+    json<{ related: GraphRelatedItem[]; count: number }>(
       `/knowledge/graph/reason/related?entryId=${encodeURIComponent(entryId)}&limit=${limit}`),
 
   // ---- 知识来源 / Knowledge sources ----
@@ -117,11 +119,11 @@ export const api = {
     json<{ success: boolean }>(`/datasources/jdbc/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // ---- Zvec 数据查看 / Zvec inspection ----
-  zvecCollections: () => json<Record<string, unknown>>('/zvec/collections'),
+  zvecCollections: () => json<{ collections: ZvecCollection[] }>('/zvec/collections'),
   zvecDocs: (name: string, limit = 50) =>
-    json<Record<string, unknown>>(`/zvec/collections/${name}/docs?limit=${limit}`),
+    json<{ docs: ZvecDoc[] }>(`/zvec/collections/${name}/docs?limit=${limit}`),
   zvecDoc: (name: string, id: string) =>
-    json<Record<string, unknown>>(`/zvec/collections/${name}/docs/${encodeURIComponent(id)}`),
+    json<{ doc: Record<string, unknown> }>(`/zvec/collections/${name}/docs/${encodeURIComponent(id)}`),
 
   deleteKnowledge: (id: string) =>
     json<{ success: boolean }>(`/knowledge/${id}`, { method: 'DELETE' }),

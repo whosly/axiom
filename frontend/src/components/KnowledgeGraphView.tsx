@@ -4,6 +4,7 @@ import { Button, Tag, Loading, Select } from 'tdesign-react';
 import { RefreshIcon } from 'tdesign-icons-react';
 import { api } from '../api';
 import { notifyError } from '../notify';
+import { GraphPayload, GraphNode, nodeId, nodeLabel, nodeType, edgeSource, edgeTarget, edgeRelation } from '../types';
 
 /**
  * 知识图谱视图 / Knowledge graph view.
@@ -17,17 +18,26 @@ const NODE_COLORS: Record<string, string> = {
   intent: '#e34d59',
 };
 
+/** 分类顺序与 legend/节点 category 共用 / Shared category order for legend & node.category. */
+const CATEGORIES = Object.keys(NODE_COLORS);
+
+/** ECharts tooltip 回调参数的最小类型 / Minimal shape of the ECharts tooltip callback param. */
+interface TooltipParam {
+  dataType?: string;
+  data: { name?: string; value?: string; source?: string; target?: string };
+}
+
 export function KnowledgeGraphView() {
   // 图数据只存节点与边；统计由当前显示的数据实时计算，聚焦子图后仍准确
   // Store only nodes/edges; stats are derived from displayed data so they stay correct after focusing.
-  const [graph, setGraph] = useState<{ nodes: any[]; edges: any[] } | null>(null);
+  const [graph, setGraph] = useState<GraphPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string>('');
 
   const load = async () => {
     setLoading(true);
     try {
-      const g: any = await api.getGraph();
+      const g = await api.getGraph();
       setGraph({ nodes: g.nodes || [], edges: g.edges || [] });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -42,40 +52,43 @@ export function KnowledgeGraphView() {
     finally { setLoading(false); }
   };
 
-  const focusNeighbors = async (nodeId: string) => {
-    if (!nodeId) { load(); return; }
+  const focusNeighbors = async (id: string) => {
+    if (!id) { load(); return; }
     setLoading(true);
     try {
-      const r: any = await api.graphNeighbors(nodeId, 2);
+      const r = await api.graphNeighbors(id, 2);
       setGraph({ nodes: r.nodes || [], edges: r.edges || [] });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
 
   const option = useMemo(() => {
-    const nodes = (graph?.nodes || []).map((n: any) => {
-      const type = String(n.TYPE ?? n.type ?? 'knowledge');
+    const nodes = (graph?.nodes || []).map((n: GraphNode) => {
+      const type = nodeType(n);
       return {
-        id: String(n.ID ?? n.id),
-        name: String(n.LABEL ?? n.label ?? n.ID ?? n.id),
+        id: nodeId(n),
+        name: nodeLabel(n),
         value: type,
         symbolSize: type === 'knowledge' ? 24 : 18,
-        itemStyle: { color: NODE_COLORS[type] || '#999' },
+        // 节点必须关联 category：否则 legend 点击切换、分类着色全部失效。
+        // / Nodes must reference a category index, or legend toggling and
+        // category-based coloring do nothing.
+        category: Math.max(0, CATEGORIES.indexOf(type)),
       };
     });
-    const links = (graph?.edges || []).map((e: any) => ({
-      source: String(e.SOURCE ?? e.source),
-      target: String(e.TARGET ?? e.target),
-      value: String(e.RELATION ?? e.relation),
+    const links = (graph?.edges || []).map((e) => ({
+      source: edgeSource(e),
+      target: edgeTarget(e),
+      value: edgeRelation(e),
     }));
     return {
       tooltip: {
-        formatter: (p: any) => p.dataType === 'edge'
+        formatter: (p: TooltipParam) => p.dataType === 'edge'
           ? `${p.data.source} --${p.data.value}--> ${p.data.target}`
           : `${p.data.name} (${p.data.value})`,
       },
       legend: [{
-        data: Object.keys(NODE_COLORS),
+        data: CATEGORIES,
         textStyle: { color: '#888' },
         bottom: 0,
       }],
@@ -86,9 +99,11 @@ export function KnowledgeGraphView() {
         draggable: true,
         data: nodes,
         links,
-        categories: Object.keys(NODE_COLORS).map(name => ({ name })),
+        // 分类颜色统一由 categories 管理，节点不再手写 itemStyle。
+        // / Colors come from the categories; nodes no longer hardcode itemStyle.
+        categories: CATEGORIES.map(name => ({ name, itemStyle: { color: NODE_COLORS[name] } })),
         label: { show: true, position: 'right', fontSize: 10, color: '#888' },
-        edgeLabel: { show: true, formatter: (p: any) => p.data.value, fontSize: 9, color: '#aaa' },
+        edgeLabel: { show: true, formatter: (p: TooltipParam) => p.data.value, fontSize: 9, color: '#aaa' },
         force: { repulsion: 260, edgeLength: 90 },
         lineStyle: { color: 'source', curveness: 0.1 },
       }],
@@ -112,8 +127,8 @@ export function KnowledgeGraphView() {
           <Select size="small" value={selected || undefined} placeholder="聚焦节点（查2跳邻居）" clearable
             style={{ width: 220 }}
             onChange={v => { setSelected(v as string || ''); focusNeighbors(v as string || ''); }}
-            options={(graph?.nodes || []).map((n: any) => ({
-              label: String(n.LABEL ?? n.label ?? ''), value: String(n.ID ?? n.id),
+            options={(graph?.nodes || []).map((n: GraphNode) => ({
+              label: nodeLabel(n), value: nodeId(n),
             }))} />
           <Button size="small" variant="outline" icon={<RefreshIcon />} onClick={load}>刷新</Button>
           <Button size="small" theme="primary" onClick={rebuild}>重建图谱</Button>

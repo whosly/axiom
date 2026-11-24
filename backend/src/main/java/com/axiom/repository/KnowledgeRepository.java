@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -82,7 +83,13 @@ public class KnowledgeRepository {
         log.info("[Knowledge] metadata schema ready");
     }
 
-    /** 保存或更新条目 / Insert or update an entry. */
+    /**
+     * 保存或更新条目 / Insert or update an entry.
+     * DELETE+INSERT 非原子，必须用事务保证失败时回滚（元数据管理器已 @Primary）。
+     * / DELETE+INSERT is not atomic on its own; wrap in a transaction so a failed INSERT
+     * rolls back the DELETE (meta transaction manager is @Primary).
+     */
+    @Transactional
     public void save(KnowledgeEntry e) {
         // DELETE+INSERT 兼容 H2 与 SQLite，充当 upsert / DELETE+INSERT works as upsert on both H2 and SQLite.
         jdbc.update("DELETE FROM knowledge_entries WHERE id = ?", e.getId());
@@ -173,12 +180,31 @@ public class KnowledgeRepository {
         jdbc.update("DELETE FROM knowledge_entries WHERE id = ?", id);
     }
 
-    /** 按来源级联软删除，返回被删除的 ID / Cascade soft-delete by source, returning IDs. */
+    /**
+     * 按来源级联软删除，返回被删除的 ID / Cascade soft-delete by source, returning IDs.
+     *
+     * <p>采用「先记录已删集合 → UPDATE → 差集」而非先查后删：旧写法在 SELECT 与 UPDATE
+     * 之间并发插入的条目会被本次 UPDATE 软删却不在返回的 ids 里，图谱子图清理因此漏删。
+     * Instead of SELECT-then-UPDATE (a row inserted in between would be soft-deleted by
+     * this call yet missing from the returned ids, so graph cleanup skips it), we snapshot
+     * the already-deleted set first and diff after the UPDATE.
+     */
+    @Transactional
     public List<String> deleteBySource(String sourceId) {
+        // 删除前已处于软删态的条目：来自历史删除调用，不属于本次结果。
+        // / Entries already soft-deleted before this call belong to earlier deletes.
+        java.util.Set<String> previouslyDeleted = new java.util.HashSet<>(jdbc.queryForList(
+                "SELECT id FROM knowledge_entries WHERE source_id = ? AND deleted = TRUE",
+                String.class, sourceId));
+        // 单条 UPDATE 替代逐条循环软删，避免 N+1 写放大；事务保证批量软删原子。
+        // / One UPDATE replaces the per-row loop (avoids N+1 writes); transactional for atomicity.
+        jdbc.update("UPDATE knowledge_entries SET deleted = TRUE, version = version + 1, updated_at = ? "
+                        + "WHERE source_id = ? AND (deleted IS NULL OR deleted = FALSE)",
+                java.time.LocalDateTime.now().toString(), sourceId);
         List<String> ids = jdbc.queryForList(
-                "SELECT id FROM knowledge_entries WHERE source_id = ? AND (deleted IS NULL OR deleted = FALSE)",
+                "SELECT id FROM knowledge_entries WHERE source_id = ? AND deleted = TRUE",
                 String.class, sourceId);
-        for (String id : ids) delete(id);
+        ids.removeIf(previouslyDeleted::contains);
         return ids;
     }
 
@@ -221,6 +247,7 @@ public class KnowledgeRepository {
      * @param entryId 条目 ID / Entry ID.
      * @param terms   分词列表 / Token list.
      */
+    @Transactional
     public void indexTerms(String entryId, List<String> terms) {
         jdbc.update("DELETE FROM knowledge_terms WHERE entry_id = ?", entryId);
         if (terms == null || terms.isEmpty()) return;

@@ -56,6 +56,7 @@ public class DataSourceConfig {
         // / The embedded engine is single-writer; a small pool avoids native-level queuing.
         cfg.setMaximumPoolSize(4);
         cfg.setPoolName("axiom-duckdb");
+        applyPoolGuardrails(cfg);
         return new HikariDataSource(cfg);
     }
 
@@ -79,7 +80,26 @@ public class DataSourceConfig {
         // / SQLite allows one writer at a time; a larger pool only amplifies SQLITE_BUSY.
         cfg.setMaximumPoolSize(2);
         cfg.setPoolName("axiom-meta");
+        applyPoolGuardrails(cfg);
         return new HikariDataSource(cfg);
+    }
+
+    /**
+     * 池守护参数：小池（2~4 连接）+ 多线程竞争下，取连接超时与泄漏检测必须显式设置，
+     * 否则连接泄漏时线程静默挂满默认 30s 且无任何诊断输出。
+     * / Pool guardrails: with a 2~4-connection pool contended by many threads, checkout
+     * timeout and leak detection must be explicit, or a leaking connection stalls threads
+     * for the default 30s with zero diagnostics.
+     */
+    private void applyPoolGuardrails(HikariConfig cfg) {
+        cfg.setConnectionTimeout(10_000);
+        // 60s 后打泄漏警告日志（不中断连接）：足以定位未关闭的连接。
+        // / Leak warning after 60s (connection not interrupted): enough to locate the culprit.
+        cfg.setLeakDetectionThreshold(60_000);
+        // 空闲连接回收比 TCP 空闲超时短，避免收到已被对端/中间件断开的死连接。
+        // / Recycle idle connections below TCP idle timeout so dead sockets are avoided.
+        cfg.setMaxLifetime(1_800_000);
+        cfg.setIdleTimeout(300_000);
     }
 
     /**

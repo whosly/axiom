@@ -23,6 +23,10 @@ public class DataIngestionService {
             "yyyy-MM-dd", "yyyy/MM/dd", "MM/dd/yyyy", "dd/MM/yyyy",
             "yyyy-MM", "yyyy", "yyyy-MM-dd HH:mm:ss", "yyyy/MM/dd HH:mm:ss"
     );
+    /** 与 DATE_PATTERNS 一一对应的预构建格式化器（线程安全，类型推断全程复用）/ Prebuilt formatters matching DATE_PATTERNS. */
+    private static final List<java.time.format.DateTimeFormatter> DATE_FORMATTERS = DATE_PATTERNS.stream()
+            .map(java.time.format.DateTimeFormatter::ofPattern)
+            .toList();
     private static final Pattern NUMERIC = Pattern.compile("^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$");
 
     public ParsedData parse(byte[] bytes, String fileName, String mimeType) throws IOException {
@@ -194,9 +198,14 @@ public class DataIngestionService {
     }
 
     private boolean isTemporal(String v) {
-        for (String p : DATE_PATTERNS) {
+        // DateTimeFormatter 线程安全且构造昂贵，预构建复用；原先对每个单元格 × 8 个
+        // pattern 重复构造，大文件类型推断因此成为解析瓶颈。
+        // / DateTimeFormatter is thread-safe and costly to build; reuse prebuilt instances.
+        // Previously a formatter was created per cell per pattern (8x per cell), making
+        // type inference the ingestion bottleneck on large files.
+        for (java.time.format.DateTimeFormatter f : DATE_FORMATTERS) {
             try {
-                java.time.LocalDate.parse(v, java.time.format.DateTimeFormatter.ofPattern(p));
+                java.time.LocalDate.parse(v, f);
                 return true;
             } catch (DateTimeParseException ignored) {}
             catch (IllegalArgumentException ignored) {}

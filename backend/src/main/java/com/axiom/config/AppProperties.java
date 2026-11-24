@@ -82,7 +82,7 @@ public class AppProperties {
         /** 元数据库类型：h2 | sqlite / Metadata store type. */
         private String metadataType = "h2";
         /** H2 连接串 / H2 JDBC URL. */
-        private String h2Url = "jdbc:h2:file:./data/h2/metadata;AUTO_SERVER=TRUE";
+        private String h2Url = "jdbc:h2:file:./data/h2/metadata";
         /** SQLite 连接串 / SQLite JDBC URL. */
         private String sqliteUrl = "jdbc:sqlite:./data/sqlite/metadata.db";
         /** 数据库用户名 / DB username. */
