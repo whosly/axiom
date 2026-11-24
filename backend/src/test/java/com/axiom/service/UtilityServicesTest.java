@@ -57,11 +57,11 @@ class UtilityServicesTest {
         RuleBasedPlanner planner = new RuleBasedPlanner();
         Dataset ds = new Dataset();
         ColumnInfo amount = new ColumnInfo();
-        amount.setName("销售额"); amount.setOriginalName("销售额");
-        amount.setType("numeric"); amount.setNullCount(0); amount.setSampleValues("");
+        amount.setName("销售额");
+        amount.setType("numeric"); amount.setSampleValues("");
         ColumnInfo dt = new ColumnInfo();
-        dt.setName("日期"); dt.setOriginalName("日期");
-        dt.setType("temporal"); dt.setNullCount(0); dt.setSampleValues("");
+        dt.setName("日期");
+        dt.setType("temporal"); dt.setSampleValues("");
         ds.setColumns(List.of(amount, dt));
 
         AnalysisPlan trend = planner.plan(ds, "分析销售额的变化趋势");

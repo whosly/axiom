@@ -29,9 +29,6 @@ public interface LlmProvider {
     /** 当前对话模型名（供编排器传入 ChatOptions）/ Active chat model name. */
     String chatModel();
 
-    /** 推理模型名（可选）/ Reasoner model name (optional). */
-    default String reasonerModel() { return chatModel(); }
-
     /** 非流式对话 / Non-streaming chat completion. */
     String chat(List<ChatMessage> messages, ChatOptions options);
 

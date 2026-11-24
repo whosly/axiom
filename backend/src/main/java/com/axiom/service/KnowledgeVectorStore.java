@@ -18,8 +18,8 @@ import java.util.List;
 /**
  * 知识库向量存储 / Knowledge-base vector store.
  *
- * <p>管理独立的 knowledge_base collection，提供两类能力：
- * Manages a dedicated knowledge_base collection and provides two capabilities:
+ * <p>管理独立的知识库 collection（knowledge_base_v2），提供两类能力：
+ * Manages a dedicated knowledge-base collection and provides two capabilities:
  * <ol>
  *   <li>知识条目的向量写入与删除 / Vector upsert and deletion of knowledge entries</li>
  *   <li>混合检索：向量召回 + jieba 全文召回，经 Zvec 原生 RRF 融合重排
@@ -38,7 +38,7 @@ public class KnowledgeVectorStore {
     /** 批量写入分片大小：每片一次 upsert+flush，控制 native 内存峰值 / Shard size for batch upsert. */
     private static final int UPSERT_BATCH_SHARD = 200;
 
-    /** Zvec Collection 对象，对应 knowledge_base / Zvec collection for knowledge_base. */
+    /** Zvec Collection 对象，对应知识库 collection / Zvec collection for the knowledge base. */
     private Collection collection;
 
     /**
@@ -67,7 +67,7 @@ public class KnowledgeVectorStore {
     }
 
     /**
-     * 初始化 knowledge_base collection / Initialize the knowledge_base collection.
+     * 初始化知识库 collection / Initialize the knowledge-base collection.
      *
      * <p>若目录已存在则 open（重启场景），否则 createAndOpen（首次）。
      * If the directory exists, open it (restart case); otherwise createAndOpen (first run).
@@ -102,7 +102,7 @@ public class KnowledgeVectorStore {
         }
     }
 
-    /** 构建 knowledge_base 的索引结构 / Build the schema of the knowledge_base collection. */
+    /** 构建知识库 collection 的索引结构 / Build the schema of the knowledge-base collection. */
     private CollectionSchema buildSchema() {
         CollectionSchema schema = new CollectionSchema(props.getZvec().getKnowledgeCollection());
 
@@ -153,15 +153,6 @@ public class KnowledgeVectorStore {
             schema.addField(chunkField);
         }
         return schema;
-    }
-
-    /**
-     * 写入知识条目的向量 / Upsert the vector of a knowledge entry.
-     *
-     * @param entry 知识条目（其 content 会被向量化）/ Knowledge entry (its content is embedded).
-     */
-    public void upsert(KnowledgeEntry entry) {
-        upsertWithResult(entry);
     }
 
     /**

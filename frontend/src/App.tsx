@@ -4,6 +4,7 @@ import { RefreshIcon, SunnyIcon, MoonIcon, SendIcon, StopIcon, ChatIcon, DeleteI
 import '@tdesign-react/chat/es/style/index.js';
 
 import { api } from './api';
+import { loadLabels } from './labels';
 import { APP_CONFIG } from './config';
 import type { Dataset, ChatSession, ChatMessage, SSEEvent } from './types';
 import { DatasetPanel } from './components/DatasetPanel';
@@ -84,6 +85,8 @@ function App() {
       setModels(m.models);
       setSelectedModel(m.defaultModel || m.models[0]?.modelId || 'deepseek');
     }).catch(e => console.error('load models failed', e));
+    // 领域标签以后端枚举为准，失败时用本地兜底 / Domain labels come from the backend.
+    loadLabels();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 切换 LLM 厂商（热更新后端配置）/ Switch LLM provider via runtime config. */

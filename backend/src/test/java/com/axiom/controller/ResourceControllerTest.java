@@ -7,8 +7,6 @@ import com.axiom.service.AnalysisOrchestrator;
 import com.axiom.service.DataIngestionService;
 import com.axiom.service.VectorService;
 import com.axiom.service.ExternalDatasourceService;
-import com.axiom.llm.LlmProviderFactory;
-import com.axiom.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,7 +34,6 @@ class ResourceControllerTest {
     @Mock private MetadataRepository metaRepo;
     @Mock private AnalysisOrchestrator orchestrator;
     @Mock private VectorService vectorService;
-    @Mock private LlmProviderFactory llmFactory;
 
     /** 数据源 Controller 委托 / Datasource controller delegates. */
     @Test
@@ -63,7 +60,7 @@ class ResourceControllerTest {
         when(datasetRepo.preview("t1", 20)).thenReturn(List.of(Map.of("a", 1)));
 
         DatasetController c = new DatasetController(ingestion, datasetRepo, metaRepo,
-                orchestrator, vectorService, new ObjectMapper(), new AppProperties(), llmFactory);
+                orchestrator, vectorService, new ObjectMapper());
         assertThat(c.list()).containsKey("datasets");
         ResponseEntity<?> preview = c.preview("d1", 20);
         assertThat(preview.getStatusCode().is2xxSuccessful()).isTrue();
@@ -76,7 +73,7 @@ class ResourceControllerTest {
     void previewMissing() {
         when(metaRepo.getDataset("missing")).thenReturn(null);
         DatasetController c = new DatasetController(ingestion, datasetRepo, metaRepo,
-                orchestrator, vectorService, new ObjectMapper(), new AppProperties(), llmFactory);
+                orchestrator, vectorService, new ObjectMapper());
         ResponseEntity<?> res = c.preview("missing", 10);
         assertThat(res.getStatusCode().is4xxClientError()).isTrue();
     }
@@ -90,7 +87,7 @@ class ResourceControllerTest {
         ds.setTableName("t1");
         when(metaRepo.getDataset("d1")).thenReturn(ds);
         DatasetController c = new DatasetController(ingestion, datasetRepo, metaRepo,
-                orchestrator, vectorService, new ObjectMapper(), new AppProperties(), llmFactory);
+                orchestrator, vectorService, new ObjectMapper());
         ResponseEntity<?> res = c.delete("d1");
         assertThat(res.getStatusCode().is2xxSuccessful()).isTrue();
         verify(datasetRepo).dropTable("t1");

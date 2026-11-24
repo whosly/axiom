@@ -80,7 +80,6 @@ class AnalysisEngineTest {
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(datasetRepo).query(sql.capture(), anyInt());
         assertThat(sql.getValue()).contains("SUM", "amount", "ds_1");
-        assertThat(result.getType()).isEqualTo("query");
         assertThat(result.getSql()).isEqualTo(sql.getValue());
     }
 
@@ -188,7 +187,6 @@ class AnalysisEngineTest {
         AnalysisResult result = engine.execute(dataset, plan);
 
         verify(datasetRepo).stats("ds_1", "amount");
-        assertThat(result.getType()).isEqualTo("summary");
         assertThat(result.getRows()).hasSize(1);
         assertThat(result.getRows().get(0)).containsKey("amount");
     }

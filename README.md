@@ -21,6 +21,11 @@ Axiom 是一个全栈 AI 数据分析系统。上传数据，用自然语言提�
 
 它的边界很清晰：**语言模型负责理解，确定性引擎负责计算**。
 
+<p align="center">
+  <a href="https://github.com/whosly/axiom/blob/main/docs/images/demo.gif"><img src="https://cdn.jsdelivr.net/gh/whosly/axiom@main/docs/images/demo.gif" width="92%" alt="Axiom 演示 / Axiom demo" /></a>
+</p>
+<p align="center"><sub>自然语言提问 → 生成分析计划 → DuckDB 确定性计算 → 流式结论 + 可视化图表<br/>Ask in natural language → analysis plan → deterministic DuckDB computation → streamed conclusion &amp; chart</sub></p>
+
 ## 目录 / Contents
 
 - [为什么是 Axiom](#为什么是-axiom--why-axiom)

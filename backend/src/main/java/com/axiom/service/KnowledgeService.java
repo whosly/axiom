@@ -480,7 +480,7 @@ public class KnowledgeService {
         detail.setLineage(buildLineage(e));
         detail.setStorage(Map.of(
                 "metadata", "H2/SQLite: knowledge_entries 表 / table",
-                "vector", "Zvec: knowledge_base collection",
+                "vector", "Zvec: " + props.getZvec().getKnowledgeCollection() + " collection",
                 "vectorId", e.getId()));
         return detail;
     }

@@ -135,13 +135,6 @@ public class KnowledgeRepository {
                 this::mapRow, kind);
     }
 
-    /** 按来源 ID 查询（级联删除用）/ Find by source ID (for cascade deletion). */
-    public List<KnowledgeEntry> listBySource(String sourceId) {
-        return jdbc.query(
-                "SELECT * FROM knowledge_entries WHERE source_id = ? AND (deleted IS NULL OR deleted = FALSE)",
-                this::mapRow, sourceId);
-    }
-
     /** 检查内容哈希是否存在（仅未删除条目，幂等去重）/ Check whether a content hash exists among live entries. */
     public boolean existsByHash(String textHash) {
         if (textHash == null) return false;
@@ -173,11 +166,6 @@ public class KnowledgeRepository {
     public void restore(String id) {
         jdbc.update("UPDATE knowledge_entries SET deleted = FALSE, version = version + 1, updated_at = ? WHERE id = ?",
                 java.time.LocalDateTime.now().toString(), id);
-    }
-
-    /** 永久删除条目（清理用）/ Permanently delete an entry (cleanup). */
-    public void purge(String id) {
-        jdbc.update("DELETE FROM knowledge_entries WHERE id = ?", id);
     }
 
     /**

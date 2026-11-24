@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
 
@@ -26,6 +27,15 @@ public class GlobalExceptionHandler {
         // Validation errors originate from user input; sanitize newlines to avoid log injection.
         String msg = oneLine(e.getMessage(), "请求参数无效 / Invalid request");
         return ResponseEntity.badRequest().body(Map.of("success", false, "error", msg));
+    }
+
+    /** 路径/静态资源不存在返回 404 / Unknown paths and missing resources map to 404. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> onNotFound(NoResourceFoundException e) {
+        // 正常的 404 属于客户端导航行为，按 500 上报会污染错误日志。
+        // / A legitimate 404 is client navigation; reporting it as 500 pollutes error logs.
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("success", false, "error", "资源不存在 / Resource not found"));
     }
 
     /** 其余异常统一 500，不回显内部细节 / Everything else is 500 without internal details. */

@@ -39,9 +39,6 @@ public class AnalysisPlan {
 
     // ---- DDD 便利方法 / Convenience methods ----
 
-    /** 意图是否为趋势分析 / Whether the intent is trend. */
-    public boolean isTrend() { return intent == AnalysisIntent.TREND; }
-
     /** 是否有明确指标 / Whether an explicit metric is specified. */
     public boolean hasMetrics() { return metrics != null && !metrics.isEmpty(); }
 

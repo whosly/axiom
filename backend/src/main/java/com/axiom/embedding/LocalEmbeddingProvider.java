@@ -125,9 +125,6 @@ public class LocalEmbeddingProvider implements EmbeddingProvider {
     @Override
     public int dimension() { return props.getEmbedding().getLocal().getDimension(); }
 
-    /** 是否已就绪 / Whether the model is loaded. */
-    public boolean isReady() { return ready; }
-
     /** 释放 ONNX 资源 / Release ONNX resources. */
     @PreDestroy
     public void close() {

@@ -171,13 +171,12 @@ public class DataIngestionService {
         List<ColumnInfo> columns = new ArrayList<>();
         for (String h : headers) {
             List<String> samples = new ArrayList<>();
-            int nullCount = 0;
             boolean allNumeric = true, allTemporal = true, allBoolean = true;
             int checked = 0;
 
             for (Map<String, Object> row : rows) {
                 Object raw = row.get(h);
-                if (raw == null || raw.toString().isBlank()) { nullCount++; continue; }
+                if (raw == null || raw.toString().isBlank()) continue;
                 String v = raw.toString().trim();
                 if (samples.size() < 3 && !samples.contains(v)) samples.add(v);
                 checked++;
@@ -192,7 +191,7 @@ public class DataIngestionService {
                 else if (allTemporal) type = "temporal";
                 else if (allBoolean) type = "boolean";
             }
-            columns.add(new ColumnInfo(h, h, type, nullCount, String.join(" | ", samples)));
+            columns.add(new ColumnInfo(h, type, String.join(" | ", samples)));
         }
         return new ParsedData(headers, rows, columns);
     }

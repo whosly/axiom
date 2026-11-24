@@ -151,12 +151,13 @@ public class VectorService {
     /**
      * 语义检索 / Semantic search with optional kind filter.
      *
-     * <p>kind 过滤必须下推到向量查询（filter 表达式），否则 topK 先截断、再逐条丢弃
-     * 不匹配项，召回可能为 0，plan 阶段的 few-shot 字段映射随之失效。若 native 层
-     * 不支持 filter（异常路径），自动回退为"扩大候选 + 本地过滤"。
-     * / The kind filter is pushed down into the query; taking topK first and dropping
-     * mismatches afterwards can yield zero hits and break few-shot recall. Falls back
-     * to over-fetch + local filtering if the native filter is unsupported.
+     * <p>kind 过滤下推到向量查询（filter 表达式），与 hybridSearch 使用同一机制。
+     * 不做本地过滤回退：filter 是 native 层的一等能力（姊妹实现长期稳定运行），
+     * 若其失败属于集成缺陷，应当暴露（log.warn + 空结果）而非静默切换到
+     * 语义不同的实现。/ The kind filter is pushed down via the same mechanism as
+     * hybridSearch. No local-filter fallback: if the native filter fails that is an
+     * integration bug and must surface (warn + empty) rather than silently switch to
+     * a semantically different path.
      */
     public List<Hit> search(String query, String kindFilter, int topK) {
         if (!ready) return Collections.emptyList();
@@ -180,42 +181,6 @@ public class VectorService {
                     for (Doc d : results) {
                         hits.add(new Hit(d.getPK(), d.getStringField("kind"),
                                 d.getStringField("refId"), d.getStringField("text"), d.getScore()));
-                    }
-                    return hits;
-                } finally {
-                    Doc.freeDocs(results);
-                }
-            }
-        } catch (Exception e) {
-            // native filter 不支持等异常 → 回退：扩大 3 倍候选后本地过滤 / Fall back to
-            // over-fetch + local filtering when the pushed-down filter is rejected.
-            log.debug("[Zvec] filtered search failed, retrying with local filter: {}", e.getMessage());
-            return searchWithLocalFilter(query, kindFilter, topK);
-        }
-    }
-
-    /** 本地过滤回退实现 / Local-filter fallback path. */
-    private List<Hit> searchWithLocalFilter(String query, String kindFilter, int topK) {
-        if (!ready) return Collections.emptyList();
-        try {
-            float[] vector = alignDimension(embeddingFactory.current().embed(query));
-            int fetch = kindFilter != null && !kindFilter.isBlank() ? Math.max(topK * 3, 15) : topK;
-            try (VectorQuery vq = new VectorQuery()) {
-                vq.setTopK(fetch);
-                vq.setFieldName("embedding");
-                vq.setQueryVector(vector);
-                List<Doc> results;
-                synchronized (zvecLock) {
-                    results = collection.query(vq);
-                }
-                try {
-                    List<Hit> hits = new ArrayList<>();
-                    for (Doc d : results) {
-                        String kind = d.getStringField("kind");
-                        if (kindFilter != null && !kindFilter.isBlank() && !kindFilter.equals(kind)) continue;
-                        hits.add(new Hit(d.getPK(), kind, d.getStringField("refId"),
-                                d.getStringField("text"), d.getScore()));
-                        if (hits.size() >= topK) break;
                     }
                     return hits;
                 } finally {

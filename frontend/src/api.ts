@@ -25,6 +25,15 @@ export const api = {
   models: async (): Promise<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }> =>
     json<{ models: Array<{ modelId: string; name: string }>; defaultModel: string }>('/models'),
 
+  // 领域枚举标签映射（意图/聚合/图表/粒度/排序）/ Domain enum label mappings.
+  labels: async (): Promise<{
+    intents: Record<string, string>;
+    aggregations: Record<string, string>;
+    chartTypes: Record<string, string>;
+    granularities: Record<string, string>;
+    sortOrders: Record<string, string>;
+  }> => json('/labels'),
+
   // 运行时 LLM 配置 / Runtime LLM configuration
   getLlmConfig: () => json<Record<string, unknown>>('/config/llm'),
   updateLlmConfig: (config: Record<string, string>) =>

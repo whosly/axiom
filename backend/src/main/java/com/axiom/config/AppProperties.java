@@ -135,10 +135,5 @@ public class AppProperties {
         public com.axiom.llm.LlmProviderConfig config(String name) {
             return providers.computeIfAbsent(name, k -> new com.axiom.llm.LlmProviderConfig());
         }
-
-        /** 当前厂商配置 / Config of the active vendor. */
-        public com.axiom.llm.LlmProviderConfig currentConfig() {
-            return config(provider);
-        }
     }
 }

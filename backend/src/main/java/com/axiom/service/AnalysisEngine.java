@@ -47,8 +47,6 @@ public class AnalysisEngine {
         } catch (Exception e) {
             log.error("[Analysis] failed: {}", e.getMessage(), e);
             AnalysisResult error = new AnalysisResult();
-            error.setType(intent.getValue());
-            error.setTitle(plan.getTitle() != null ? plan.getTitle() : "分析失败");
             error.setConclusion("分析执行失败：" + e.getMessage());
             error.setInsights(List.of("请检查问题中的字段名是否存在于数据集"));
             error.setRows(List.of());
@@ -79,7 +77,7 @@ public class AnalysisEngine {
         sql.append(aggOrderClause(plan, agg, metrics));
 
         List<Map<String, Object>> rows = datasetRepo.query(sql.toString(), plan.getLimit());
-        AnalysisResult result = base(plan, rows, sql.toString(), "数据查询");
+        AnalysisResult result = base(plan, rows, sql.toString());
 
         String xField = plan.hasDimension() ? "dimension" : metrics.get(0);
         String yField = !rows.isEmpty() ? rows.get(0).keySet().stream()
@@ -129,7 +127,7 @@ public class AnalysisEngine {
                 + " ORDER BY period" + (hasDim ? ", dimension" : "");
 
         List<Map<String, Object>> rows = datasetRepo.query(sql, Integer.MAX_VALUE);
-        AnalysisResult result = base(plan, rows, sql, "趋势分析");
+        AnalysisResult result = base(plan, rows, sql);
         result.setChart(new ChartSpec(ChartType.LINE.getValue(), "period",
                 hasDim ? List.of(metrics.get(0)) : metrics,
                 plan.getTitle() != null ? plan.getTitle() : metrics.get(0) + " " + granularity.getLabel() + "趋势", rows));
@@ -156,7 +154,7 @@ public class AnalysisEngine {
         List<Map<String, Object>> raw = datasetRepo.query(sql, 10000);
         List<Map<String, Object>> anomalies = detectAnomalies(raw);
         String resultSql = sql + " -- z-score / IQR anomaly detection";
-        AnalysisResult result = base(plan, anomalies, resultSql, "异常识别");
+        AnalysisResult result = base(plan, anomalies, resultSql);
         result.setChart(new ChartSpec(ChartType.SCATTER.getValue(), "item", List.of("value"),
                 plan.getTitle() != null ? plan.getTitle() : metric + " 异常检测", anomalies));
 
@@ -320,7 +318,7 @@ public class AnalysisEngine {
                 + whereClause(plan) + " GROUP BY " + q(dimension) + compareOrderClause(plan, dimension, metrics);
 
         List<Map<String, Object>> rows = datasetRepo.query(sql, plan.getLimit());
-        AnalysisResult result = base(plan, rows, sql, "指标对比");
+        AnalysisResult result = base(plan, rows, sql);
         result.setChart(new ChartSpec(plan.getChartType().getValue(), "dimension", metrics,
                 plan.getTitle() != null ? plan.getTitle() : "指标对比", rows));
 
@@ -354,7 +352,7 @@ public class AnalysisEngine {
         List<Map<String, Object>> rows = new ArrayList<>();
         rows.add(stats);
 
-        AnalysisResult result = base(plan, rows, "-- descriptive statistics", "数据概览");
+        AnalysisResult result = base(plan, rows, "-- descriptive statistics");
         // 图表列范围必须与 stats 统计范围一致，否则超出部分的列会画出高度为 0 的假柱子。
         // The chart must cover exactly the same columns as stats, or extra columns render as zero bars.
         List<String> charted = numeric.subList(0, Math.min(5, numeric.size()));
@@ -381,13 +379,10 @@ public class AnalysisEngine {
 
     // ---- helpers ----
 
-    private AnalysisResult base(AnalysisPlan plan, List<Map<String, Object>> rows, String sql, String fallbackTitle) {
+    private AnalysisResult base(AnalysisPlan plan, List<Map<String, Object>> rows, String sql) {
         AnalysisResult r = new AnalysisResult();
-        r.setType(plan.getIntent().getValue());
-        r.setTitle(plan.getTitle() != null ? plan.getTitle() : fallbackTitle);
         r.setRows(rows);
         r.setSql(sql);
-        r.setSummary(Map.of("rowCount", rows.size()));
         return r;
     }
 

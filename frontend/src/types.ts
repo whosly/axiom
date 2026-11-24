@@ -140,22 +140,6 @@ export const KIND_LABELS: Record<string, string> = {
   case: '历史案例',
 };
 
-export const INTENT_LABELS: Record<string, string> = {
-  query: '数据查询',
-  trend: '趋势分析',
-  anomaly: '异常识别',
-  compare: '指标对比',
-  summary: '数据概览',
-};
-
-export const INTENT_COLORS: Record<string, string> = {
-  query: '#0052d9',
-  trend: '#00a870',
-  anomaly: '#e34d59',
-  compare: '#ed7b2f',
-  summary: '#8e56ff',
-};
-
 // ---- 知识图谱 / Knowledge graph ----
 
 /**

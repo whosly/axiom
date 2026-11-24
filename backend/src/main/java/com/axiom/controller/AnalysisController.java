@@ -56,6 +56,45 @@ public class AnalysisController {
                 "defaultModel", llmFactory.current().providerName());
     }
 
+    /**
+     * 领域枚举标签映射 / Domain enum label mappings.
+     *
+     * <p>前端展示标签统一来自后端枚举（单一事实来源），本地常量仅作离线兜底，
+     * 避免两端映射漂移。/ Frontend labels come from backend enums (single source of
+     * truth); local constants serve only as offline fallback.
+     *
+     * @return 各枚举 value → 中文标签 / value-to-label maps for each enum.
+     */
+    @GetMapping("/labels")
+    public Map<String, Object> labels() {
+        Map<String, String> intents = new LinkedHashMap<>();
+        for (com.axiom.domain.AnalysisIntent i : com.axiom.domain.AnalysisIntent.values()) {
+            intents.put(i.getValue(), i.getLabel());
+        }
+        Map<String, String> aggregations = new LinkedHashMap<>();
+        for (com.axiom.domain.Aggregation a : com.axiom.domain.Aggregation.values()) {
+            aggregations.put(a.getValue(), a.getLabel());
+        }
+        Map<String, String> chartTypes = new LinkedHashMap<>();
+        for (com.axiom.domain.ChartType t : com.axiom.domain.ChartType.values()) {
+            chartTypes.put(t.getValue(), t.getLabel());
+        }
+        Map<String, String> granularities = new LinkedHashMap<>();
+        for (com.axiom.domain.TimeGranularity g : com.axiom.domain.TimeGranularity.values()) {
+            granularities.put(g.getValue(), g.getLabel());
+        }
+        Map<String, String> sortOrders = new LinkedHashMap<>();
+        for (com.axiom.domain.SortOrder s : com.axiom.domain.SortOrder.values()) {
+            sortOrders.put(s.getValue(), s.getLabel());
+        }
+        return Map.of(
+                "intents", intents,
+                "aggregations", aggregations,
+                "chartTypes", chartTypes,
+                "granularities", granularities,
+                "sortOrders", sortOrders);
+    }
+
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody Map<String, Object> body) {

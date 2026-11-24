@@ -58,12 +58,6 @@ public abstract class OpenAiCompatibleProvider implements LlmProvider {
     public String chatModel() { return cfg().getChatModel(); }
 
     @Override
-    public String reasonerModel() {
-        return cfg().getReasonerModel() == null || cfg().getReasonerModel().isBlank()
-                ? chatModel() : cfg().getReasonerModel();
-    }
-
-    @Override
     public String chat(List<ChatMessage> messages, ChatOptions options) {
         Request request = buildChatRequest(messages, options, false);
         try (Response response = http.newCall(request).execute()) {

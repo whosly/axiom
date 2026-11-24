@@ -1,7 +1,5 @@
 package com.axiom.controller;
 
-import com.axiom.config.AppProperties;
-import com.axiom.llm.LlmProviderFactory;
 import com.axiom.model.*;
 import com.axiom.repository.DatasetRepository;
 import com.axiom.repository.MetadataRepository;
@@ -30,8 +28,6 @@ public class DatasetController {
     private final AnalysisOrchestrator orchestrator;
     private final com.axiom.service.VectorService vectorService;
     private final ObjectMapper mapper;
-    private final AppProperties props;
-    private final LlmProviderFactory llmFactory;
 
     @GetMapping
     public Map<String, Object> list() {

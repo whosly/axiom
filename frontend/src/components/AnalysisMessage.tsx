@@ -2,7 +2,7 @@ import { lazy, Suspense, useState } from 'react';
 import { Tag, Loading } from 'tdesign-react';
 import { ChevronDownIcon, ChartBarIcon, TipsIcon, CheckCircleIcon } from 'tdesign-icons-react';
 import type { ChatMessage } from '../types';
-import { INTENT_LABELS } from '../types';
+import { intentLabel } from '../labels';
 
 // ECharts 体积较大，按需加载避免阻塞首屏 / Lazy-load the heavy ECharts bundle.
 const AnalysisChart = lazy(() => import('./AnalysisChart').then(m => ({ default: m.AnalysisChart })));
@@ -46,7 +46,7 @@ export function AnalysisMessage({ message, dark }: Props) {
         {plan && (
           <div className="flex items-center gap-2 flex-wrap">
             <Tag theme="primary" variant="light" size="small">
-              {INTENT_LABELS[plan.intent] || plan.intent}
+              {intentLabel(plan.intent)}
             </Tag>
             {plan.title && <span className="text-sm font-medium" style={{ color: 'var(--td-text-color-primary)' }}>{plan.title}</span>}
             {plan.reasoning && (
