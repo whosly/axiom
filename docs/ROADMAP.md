@@ -16,7 +16,7 @@
 | 知识图谱 | 实体关系抽取、增量自动同步、BFS 邻居查询、社区发现、最短路径、关联分析、ECharts 可视化 |
 | 前端 | 数据集管理、SSE 对话、ECharts 图表、知识库五视图（条目/图谱/推理/Zvec/来源）、文档上传、向量状态与重建、模型选择、会话重命名 |
 | 部署 | 单 jar 常驻、Docker 一键部署、公网 HTTPS（Nginx overlay）、备份恢复脚本 |
-| 测试 | 后端 71 个单元测试（行覆盖 34.3%）+ 前端 15 个测试（`sse.ts` 100% 覆盖）；`scripts/coverage.sh` 一键生成报告 |
+| 测试 | 后端 95 个单元测试 + 前端 15 个测试（`sse.ts` 100% 覆盖）；`scripts/coverage.sh` 一键生成报告 |
 | 文档 | README / 架构设计 / 部署与扩展 / LLM 扩展指南 / 路线图 |
 
 ### 已完成批次
@@ -40,6 +40,8 @@
 | 15 | 通义千问 Provider | P2 | OpenAI 兼容基类抽取，DeepSeek/通义共享协议层 |
 | 16 | 图谱推理性能 | P2 | 版本快照、紧凑图、大图采样、结果缓存 |
 | 17 | 覆盖率报告固定输出 | P2 | `scripts/coverage.sh` + `reports/coverage/`，不受 `mvn clean` 影响 |
+| 18 | 多厂商兼容与健壮性加固 | Bug 修复 | ChatOptions jsonMode 参数错位（plan 被强加 JSON 模式的多厂商兼容根因）、公式指标异常检测路径、vite 配置产物遮蔽、SSE 线程池优雅停机 4 个高危；FormulaCompiler 守卫加固（意外 token 报语法错/括号深度上限/深度只统计引用链）；Zvec 检视串行锁、Excel 日期解析、空 apiKey 保护、图谱重建事务；向量热路径批量化 + 问题向量 LRU 缓存；前端失败态/IME 守卫/流中断状态一致；nginx gzip 与缓存、备份恢复、模型路径修正，共 30+ 项 |
+| 19 | 分析列选择与 Excel 流式解析 | P2 | compare/query 指标校验（非数值列且非公式字段提前报错）；compare 维度兜底跳过 ID 类列（纯命名/下划线后缀/中英混排「订单ID」）；Excel .xlsx 改 SAX 事件流式（内存只随表头+当前行增长），日期 ISO 输出与 DOM 路径对齐，200k 行超限报错不静默截断 |
 
 ## 二、明确不做 / Out of Scope
 
@@ -51,6 +53,8 @@
 
 ## 三、变更记录 / Changelog
 
+- 2026-11-24：compare/query 指标校验与 compare 维度兜底跳过 ID 类列；Excel .xlsx 改 SAX 流式解析（大文件内存可控、日期/布尔与 DOM 路径行为对齐、200k 行护栏）；后端测试 71→95；端到端对账验证分析数值与原始数据逐项一致
+- 2026-11-24：全量审查修复 30+ 项（详见已完成批次 #18）：4 个高危（plan 误加 JSON 模式 / 公式指标异常路径 / vite 产物遮蔽 / SSE 线程池停机）、FormulaCompiler 守卫加固、向量热路径批量化、前端健壮性、部署配置修正
 - 2026-11-24：指标公式确定性执行落地（FormulaCompiler 递归下降解析 + aggregate-then-compute 编译 + NULLIF 除零防护 + 公式引用公式/循环检测 + 录入语法校验）；领域枚举标签开放 `GET /api/labels`（标签单一事实来源）；清理历史死代码
 - 2026-11-23：文档重构为 5 篇（README / 架构设计 / 部署与扩展 / LLM 扩展指南 / 路线图）；覆盖率报告固定输出到 `reports/coverage/`；项目更名为 Axiom，包名统一为 `com.axiom`
 - 2026-11-22：新增通义千问 Provider，重构 LLM 策略模式与配置结构，图谱同步全量去重建；测试 24→71、前端 7→15

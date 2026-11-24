@@ -4,6 +4,8 @@ import com.axiom.model.ColumnInfo;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.apache.poi.xssf.eventusermodel.XSSFReader;
+import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -115,11 +117,36 @@ public class DataIngestionService {
 
     // ---- Excel ----
 
+    /**
+     * 流式解析行数上限：超过即报错而非静默截断——截断会让分析口径失真，
+     * 且用户毫无感知。200k 行 × 20 列字符串约百余 MB，处于可控范围。
+     * / Streaming row cap: fail loudly instead of silently truncating, which
+     * distorts analytics without the user ever noticing.
+     */
+    private static final int MAX_XLSX_ROWS = 200_000;
+
+    /** 行数护栏专用信号异常：SAX 无干净的中止 API，用 RuntimeException 中断解析。 */
+    private static final class RowLimitReached extends RuntimeException {}
+
     private ParsedData parseExcel(byte[] bytes) throws IOException {
-        // WorkbookFactory 按文件魔数自动识别 HSSF(.xls) 与 XSSF(.xlsx)：
-        // 此前固定用 XSSFWorkbook 打开，老式 .xls 必然抛 InvalidFormatException。
-        // / WorkbookFactory detects HSSF(.xls) vs XSSF(.xlsx) by magic bytes; a hard-coded
-        // XSSFWorkbook always failed on legacy .xls files.
+        // 按魔数分流而非扩展名（扩展名可被改名误导）：
+        // - OLE2(.xls)：HSSF 行数硬上限 65536，DOM 内存有界，走 WorkbookFactory；
+        // - ZIP(.xlsx)：无行数上限，XSSF DOM 随文件膨胀 10-50 倍内存，必须走 SAX 流式。
+        // / Dispatch by magic bytes, not extension (extensions can be misleading):
+        // OLE2 (.xls) has a hard 65536-row cap so DOM is bounded; ZIP (.xlsx) has no
+        // cap and an XSSF DOM inflates memory 10-50x, so stream it with SAX.
+        try (InputStream probe = new ByteArrayInputStream(bytes)) {
+            org.apache.poi.poifs.filesystem.FileMagic magic =
+                    org.apache.poi.poifs.filesystem.FileMagic.valueOf(probe);
+            if (magic == org.apache.poi.poifs.filesystem.FileMagic.OLE2) {
+                return parseXlsDom(bytes);
+            }
+            return parseXlsxStreaming(bytes, MAX_XLSX_ROWS);
+        }
+    }
+
+    /** .xls 走 DOM：行数有硬上限，WorkbookFactory 按 HSSF 打开。 */
+    private ParsedData parseXlsDom(byte[] bytes) throws IOException {
         try (org.apache.poi.ss.usermodel.Workbook wb =
                      org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
             org.apache.poi.ss.usermodel.Sheet sheet = wb.getSheetAt(0);
@@ -144,6 +171,122 @@ public class DataIngestionService {
                 }
                 rows.add(map);
             }
+            return buildResult(headers, rows);
+        }
+    }
+
+    /**
+     * .xlsx 走 SAX 事件流式（XSSFReader + XSSFSheetXMLHandler）：逐行回调装配，
+     * 不构建整簿 DOM，内存占用只随「表头 + 当前行」增长而非整个文件。
+     * / Stream .xlsx via the SAX event model: rows are assembled from callbacks,
+     * memory scales with header + current row instead of the whole workbook DOM.
+     */
+    /** .xlsx 流式解析；包内可见以便测试注入小行数上限触发护栏。 */
+    ParsedData parseXlsxStreaming(byte[] bytes, int maxRows) throws IOException {
+        try (org.apache.poi.openxml4j.opc.OPCPackage pkg =
+                     org.apache.poi.openxml4j.opc.OPCPackage.open(new ByteArrayInputStream(bytes))) {
+            XSSFReader reader = new XSSFReader(pkg);
+            org.apache.poi.xssf.model.StylesTable styles = reader.getStylesTable();
+            if (styles == null) throw new IOException("Excel 无样式表");
+            org.apache.poi.xssf.eventusermodel.ReadOnlySharedStringsTable strings =
+                    new org.apache.poi.xssf.eventusermodel.ReadOnlySharedStringsTable(pkg);
+            XSSFReader.SheetIterator sheets = (XSSFReader.SheetIterator) reader.getSheetsData();
+            if (!sheets.hasNext()) throw new IOException("Excel 文件无工作表");
+
+            StreamingSheetHandler collector = new StreamingSheetHandler(maxRows);
+            try (InputStream sheetStream = sheets.next()) {
+                // 日期单元格对齐 DOM 路径（isCellDateFormatted → ISO 输出），保证
+                // 类型推断在两条解析路径上行为一致，趋势分析不因路径而异。
+                // / Emit ISO dates for date cells so type inference behaves identically
+                // on both parse paths (DOM uses isCellDateFormatted).
+                org.apache.poi.ss.usermodel.DataFormatter formatter =
+                        new org.apache.poi.ss.usermodel.DataFormatter() {
+                            @Override
+                            public String formatRawCellContents(double value, int formatIndex, String formatString) {
+                                if (org.apache.poi.ss.usermodel.DateUtil.isADateFormat(formatIndex, formatString)) {
+                                    try {
+                                        java.time.LocalDateTime dt =
+                                                org.apache.poi.ss.usermodel.DateUtil.getLocalDateTime(value);
+                                        return dt.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+                                                ? dt.toLocalDate().toString() : dt.toString();
+                                    } catch (IllegalArgumentException ignored) {
+                                        // 非法序列号按普通数值输出 / fall through to plain numeric.
+                                    }
+                                }
+                                return super.formatRawCellContents(value, formatIndex, formatString);
+                            }
+                        };
+                org.xml.sax.XMLReader parser = org.apache.poi.util.XMLHelper.newXMLReader();
+                parser.setContentHandler(new XSSFSheetXMLHandler(styles, strings, collector, formatter, false));
+                try {
+                    parser.parse(new org.xml.sax.InputSource(sheetStream));
+                } catch (RowLimitReached stop) {
+                    throw new IOException("Excel 超过最大导入行数 " + MAX_XLSX_ROWS + "，请拆分文件后再上传");
+                }
+            }
+            return collector.result();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Excel 解析失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * SAX 行收集器：首行为表头，其后逐行装配成 map（与 DOM 路径同构）。
+     * XSSFSheetXMLHandler 只对存在的单元格回调，稀疏行按列号补 null。
+     */
+    private final class StreamingSheetHandler
+            implements XSSFSheetXMLHandler.SheetContentsHandler {
+        private final int maxRows;
+        private List<String> headers;
+        private final List<Map<String, Object>> rows = new ArrayList<>();
+        private final Map<Integer, String> current = new HashMap<>();
+        private boolean headerDone = false;
+
+        StreamingSheetHandler(int maxRows) { this.maxRows = maxRows; }
+
+        @Override public void startRow(int rowNum) { current.clear(); }
+
+        @Override public void endRow(int rowNum) {
+            if (!headerDone) {
+                // 表头宽度取出现过的最大列号 +1，空缺表头补 col_N。
+                // / Header width = max seen column index + 1; gaps become col_N.
+                int width = current.keySet().stream().max(Integer::compare).orElse(-1) + 1;
+                if (width == 0) throw new IllegalStateException("Excel 首行为空");
+                headers = new ArrayList<>(width);
+                for (int c = 0; c < width; c++) {
+                    String h = current.get(c);
+                    headers.add(h == null || h.isEmpty() ? "col_" + c : h);
+                }
+                sanitizeHeaders(headers);
+                headerDone = true;
+                return;
+            }
+            if (rows.size() >= maxRows) throw new RowLimitReached();
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (int c = 0; c < headers.size(); c++) {
+                String v = current.get(c);
+                map.put(headers.get(c), v == null || v.isEmpty() ? null : v);
+            }
+            rows.add(map);
+        }
+
+        @Override public void cell(String cellReference, String formattedValue,
+                                   org.apache.poi.xssf.usermodel.XSSFComment comment) {
+            if (cellReference == null) return;
+            int col = new org.apache.poi.ss.util.CellReference(cellReference).getCol();
+            String v = formattedValue == null ? "" : formattedValue.trim();
+            // SAX 对布尔单元格输出 "TRUE"/"FALSE"，与 DOM 路径的 "true"/"false" 归一，
+            // 否则同一文件两条路径类型推断结果不同。/ Normalize SAX boolean casing
+            // to match the DOM path so type inference is path-independent.
+            if ("TRUE".equalsIgnoreCase(v)) v = "true";
+            else if ("FALSE".equalsIgnoreCase(v)) v = "false";
+            current.put(col, v);
+        }
+
+        /** 供上层组装类型推断结果 / Expose collected rows for buildResult. */        ParsedData result() {
+            if (!headerDone) throw new IllegalStateException("Excel 首行为空");
             return buildResult(headers, rows);
         }
     }

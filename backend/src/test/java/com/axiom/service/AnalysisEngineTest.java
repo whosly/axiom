@@ -153,6 +153,53 @@ class AnalysisEngineTest {
     }
 
     /**
+     * 指标校验：文本/类别列不能做聚合，提前显式报错而非让 DuckDB 报
+     * 晦涩的函数不匹配。/ Metric validation: aggregating a categorical column
+     * fails early with a clear message instead of an obscure DuckDB error.
+     */
+    @Test
+    @DisplayName("对比：类别列作指标显式报错")
+    void compareRejectsNonNumericMetric() {
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.COMPARE);
+        plan.setMetrics(List.of("region"));
+        plan.setDimension("dt");
+
+        // execute 的失败短路约定：sql 为 null 且结论携带原因 / failure contract: sql == null.
+        AnalysisResult result = engine.execute(dataset, plan);
+        assertThat(result.getSql()).isNull();
+        assertThat(result.getConclusion()).contains("不是数值列或公式字段");
+    }
+
+    /**
+     * 维度兜底跳过 ID 类列：类别列里有「订单ID」时优先选 region，
+     * 否则按唯一标识分组每行一组，对比图全是噪音。
+     * / Dimension fallback skips identifier-like columns in favor of region.
+     */
+    @Test
+    @DisplayName("对比：维度兜底跳过 ID 类类别列")
+    void compareDimensionFallbackSkipsIdColumn() {
+        ColumnInfo orderId = new ColumnInfo();
+        orderId.setName("订单ID");
+        orderId.setType("categorical");
+        List<ColumnInfo> existing = dataset.getColumns();
+        dataset.setColumns(List.of(existing.get(0), orderId, existing.get(1), existing.get(2)));
+
+        when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of());
+        AnalysisPlan plan = new AnalysisPlan();
+        plan.setIntent(AnalysisIntent.COMPARE);
+        plan.setMetrics(List.of("amount"));
+        plan.setDimension(null);
+
+        engine.execute(dataset, plan);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(datasetRepo).query(sql.capture(), anyInt());
+        assertThat(sql.getValue()).contains("GROUP BY", "region");
+        assertThat(sql.getValue()).doesNotContain("订单ID");
+    }
+
+    /**
      * 分组聚合查询的 ORDER BY 必须引用聚合别名，否则 DuckDB 报
      * "column must appear in GROUP BY"。回归防护：sortBy=指标列时按别名排序。
      * Regression guard: grouped aggregate ORDER BY must reference the alias, not the raw column.

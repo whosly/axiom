@@ -80,7 +80,7 @@ public class AnalysisEngine {
     private AnalysisResult query(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
         String agg = plan.getAggregation().getSql();
         List<String> metrics = plan.hasMetrics()
-                ? plan.getMetrics()
+                ? resolveMetrics(dataset, plan.getMetrics(), formulas)
                 : List.of(firstNumericOrOne(dataset));
 
         List<String> selectParts = new ArrayList<>();
@@ -354,10 +354,12 @@ public class AnalysisEngine {
     // ---- 指标对比 / compare ----
 
     private AnalysisResult compare(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
-        String dimension = plan.hasDimension() ? plan.getDimension() : firstCategorical(dataset);
+        String dimension = plan.hasDimension() ? plan.getDimension() : firstCompareDimension(dataset);
         if (dimension == null) throw new IllegalArgumentException("数据集中没有类别列，无法做指标对比");
 
-        List<String> metrics = plan.hasMetrics() ? plan.getMetrics() : List.of(firstNumericOrOne(dataset));
+        List<String> metrics = plan.hasMetrics()
+                ? resolveMetrics(dataset, plan.getMetrics(), formulas)
+                : List.of(firstNumericOrOne(dataset));
 
         List<String> selects = new ArrayList<>();
         selects.add(q(dimension) + " AS dimension");
@@ -540,6 +542,55 @@ public class AnalysisEngine {
     private String firstCategorical(Dataset d) {
         return d.getColumns().stream().filter(c -> "categorical".equals(c.getType()))
                 .map(ColumnInfo::getName).findFirst().orElse(null);
+    }
+
+    /**
+     * 指标校验：过滤掉既非数值列也非公式字段的指标。对文本列做 SUM 在 DuckDB
+     * 只报晦涩的 "No function matches"，提前拦截并显式报错；全部无效时同样报错。
+     * / Metric validation: drop metrics that are neither numeric columns nor formula
+     * fields. SUM over text fails obscurely in DuckDB; fail early with a clear message.
+     */
+    private List<String> resolveMetrics(Dataset dataset, List<String> requested, Map<String, String> formulas) {
+        Set<String> numeric = dataset.getColumns().stream()
+                .filter(c -> "numeric".equals(c.getType()))
+                .map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+        List<String> valid = requested.stream()
+                .filter(m -> formulas.containsKey(m) || numeric.contains(m)).toList();
+        if (valid.isEmpty()) {
+            throw new IllegalArgumentException("指标列不是数值列或公式字段，无法聚合: " + requested);
+        }
+        return valid;
+    }
+
+    /** 疑似主键/编号列名 / Column names that look like identifiers. */
+    private static final Set<String> ID_LIKE_NAMES = Set.of(
+            "id", "no", "code", "编号", "序号", "单号", "订单号", "客户号");
+
+    /**
+     * 标识列判定：纯 ID 命名、下划线后缀（user_id）与中英混排（订单ID）都算。
+     * / Identifier detection covers plain names, underscore suffixes and
+     * mixed CJK-latin names like 订单ID.
+     */
+    private boolean looksLikeId(String name) {
+        String n = name.toLowerCase().replaceAll("[\\s_\\-]", "");
+        if (ID_LIKE_NAMES.contains(n)) return true;
+        if (n.endsWith("_id") || n.endsWith("_no") || n.endsWith("_code")) return true;
+        // 含中文且以拉丁缩写结尾（订单id / 客户no）视为标识列 / CJK names ending in id/no/code.
+        return n.matches(".*[\\u4e00-\\u9fa5](id|no|code)$");
+    }
+
+    /**
+     * compare 的维度兜底：跳过 ID/编号类类别列——用唯一标识做 GROUP BY 会把
+     * 每行拆成一组，对比图变成噪音。找不到合适列时回退到首个类别列。
+     * / compare dimension fallback: skip identifier-like categorical columns —
+     * grouping by a unique key yields one group per row and a noise-only chart.
+     */
+    private String firstCompareDimension(Dataset d) {
+        String candidate = d.getColumns().stream()
+                .filter(c -> "categorical".equals(c.getType()))
+                .filter(c -> !looksLikeId(c.getName()))
+                .map(ColumnInfo::getName).findFirst().orElse(null);
+        return candidate != null ? candidate : firstCategorical(d);
     }
 
     private String firstNumericOrOne(Dataset d) {

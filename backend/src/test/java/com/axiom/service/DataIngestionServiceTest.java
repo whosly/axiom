@@ -82,4 +82,106 @@ class DataIngestionServiceTest {
         assertThat(data.headers()).isEmpty();
         assertThat(data.rows()).isEmpty();
     }
+
+    /**
+     * .xlsx 流式解析：日期/数值/布尔/公式单元格与 DOM 路径行为对齐，
+     * 类型推断（temporal/numeric/boolean）不因 SAX 路径而变化。
+     */
+    @Test
+    @DisplayName("xlsx 流式解析与类型推断")
+    void parseXlsxStreaming() throws Exception {
+        byte[] bytes;
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = wb.createSheet("数据");
+            org.apache.poi.ss.usermodel.Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("日期");
+            header.createCell(1).setCellValue("销售额");
+            header.createCell(2).setCellValue("达标");
+            header.createCell(3).setCellValue("毛利");
+            for (int r = 1; r <= 3; r++) {
+                org.apache.poi.ss.usermodel.Row row = sheet.createRow(r);
+                org.apache.poi.ss.usermodel.Cell date = row.createCell(0);
+                date.setCellValue(java.time.LocalDate.of(2026, 1, r).toString());
+                org.apache.poi.ss.usermodel.CellStyle dateStyle = wb.createCellStyle();
+                dateStyle.setDataFormat(
+                        wb.createDataFormat().getFormat("yyyy-mm-dd"));
+                date.setCellStyle(dateStyle);
+                row.createCell(1).setCellValue(1200.5 * r);
+                row.createCell(2).setCellValue(r % 2 == 0);
+                // 公式单元格：SAX 路径取缓存结果 / formula cell: cached result via SAX.
+                org.apache.poi.ss.usermodel.Cell f = row.createCell(3);
+                f.setCellFormula("B" + (r + 1) + "*0.2");
+            }
+            // SAX 路径读取公式缓存值，写入前必须求值 / SAX reads cached formula values; evaluate first.
+            wb.getCreationHelper().createFormulaEvaluator().evaluateAll();
+            try (var out = new java.io.ByteArrayOutputStream()) {
+                wb.write(out);
+                bytes = out.toByteArray();
+            }
+        }
+        DataIngestionService.ParsedData data = service.parse(bytes, "sales.xlsx", "application/octet-stream");
+        assertThat(data.headers()).containsExactly("日期", "销售额", "达标", "毛利");
+        assertThat(data.rows()).hasSize(3);
+        // 第一行数据 / first data row.
+        Map<String, Object> row0 = data.rows().get(0);
+        assertThat(row0.get("日期")).isEqualTo("2026-01-01");
+        assertThat(row0.get("销售额")).isEqualTo("1200.5");
+        assertThat(row0.get("达标")).isEqualTo("false");
+        assertThat(row0.get("毛利")).isEqualTo("240.1");
+        // 类型推断与 CSV 路径一致 / type inference identical to the CSV path.
+        assertThat(data.columns().get(0).getType()).isEqualTo("temporal");
+        assertThat(data.columns().get(1).getType()).isEqualTo("numeric");
+        assertThat(data.columns().get(2).getType()).isEqualTo("boolean");
+    }
+
+    /** .xls（HSSF）走 DOM 路径仍可用 / legacy .xls keeps working through the DOM path. */
+    @Test
+    @DisplayName("xls 老格式 DOM 解析")
+    void parseXlsDom() throws Exception {
+        byte[] bytes;
+        try (org.apache.poi.hssf.usermodel.HSSFWorkbook wb = new org.apache.poi.hssf.usermodel.HSSFWorkbook()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = wb.createSheet("S1");
+            org.apache.poi.ss.usermodel.Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("名称");
+            header.createCell(1).setCellValue("数量");
+            org.apache.poi.ss.usermodel.Row row = sheet.createRow(1);
+            row.createCell(0).setCellValue("产品A");
+            row.createCell(1).setCellValue(42);
+            try (var out = new java.io.ByteArrayOutputStream()) {
+                wb.write(out);
+                bytes = out.toByteArray();
+            }
+        }
+        DataIngestionService.ParsedData data = service.parse(bytes, "old.xls", "application/vnd.ms-excel");
+        assertThat(data.headers()).containsExactly("名称", "数量");
+        assertThat(data.rows()).hasSize(1);
+        assertThat(data.rows().get(0).get("数量")).isEqualTo("42");
+        assertThat(data.columns().get(1).getType()).isEqualTo("numeric");
+    }
+
+    /** 流式行数护栏：超限报错而非静默截断 / row cap fails loudly instead of truncating. */
+    @Test
+    @DisplayName("xlsx 行数上限护栏")
+    void parseXlsxRowLimit() throws Exception {
+        byte[] bytes;
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = wb.createSheet("S1");
+            org.apache.poi.ss.usermodel.Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("v");
+            for (int r = 1; r <= 10; r++) {
+                sheet.createRow(r).createCell(0).setCellValue(r);
+            }
+            try (var out = new java.io.ByteArrayOutputStream()) {
+                wb.write(out);
+                bytes = out.toByteArray();
+            }
+        }
+        // 同一文件：上限 5 报错，上限 20 正常通过 / cap 5 fails, cap 20 succeeds.
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.parseXlsxStreaming(bytes, 5))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("最大导入行数");
+        DataIngestionService.ParsedData ok = service.parseXlsxStreaming(bytes, 20);
+        assertThat(ok.rows()).hasSize(10);
+    }
 }
