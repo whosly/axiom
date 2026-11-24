@@ -97,27 +97,40 @@ public class AnalysisEngine {
 
         TimeGranularity granularity = plan.getTimeGranularity();
         String agg = plan.getAggregation().getSql();
-        String metric = plan.hasMetrics() ? plan.getMetrics().get(0) : firstNumeric(dataset);
-        if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做趋势分析");
+        List<String> metrics = plan.hasMetrics() ? plan.getMetrics() : List.of(firstNumeric(dataset));
+        if (metrics.isEmpty() || metrics.get(0) == null) throw new IllegalArgumentException("数据集中没有数值列，无法做趋势分析");
 
-        // 关键修复：用 granularity.periodSql 生成格式化后的 period（如 2026-01），
-        // 而非裸 DATE_TRUNC（返回 2026-01-01，与"每月总额"语义不符）。
-        // Key fix: use granularity.periodSql to produce a formatted period (e.g. 2026-01)
-        // instead of raw DATE_TRUNC (which returns 2026-01-01, contradicting "monthly total").
+        // 关键修复 1：用 granularity.periodSql 生成格式化后的 period（如 2026-01）。
+        // 关键修复 2：filters 必须生效——"华东每月趋势"不能返回全国数据。
+        // 关键修复 3：支持 dimension 多序列与多指标，"各产品每月销售额"不再退化为整体趋势。
+        // Key fixes: formatted period; filters applied; dimension/multi-metric supported.
         String periodExpr = granularity.periodSql(q(timeCol));
-        String sql = """
-            SELECT %s AS period, %s(%s) AS value
-            FROM %s
-            WHERE %s IS NOT NULL
-            GROUP BY period ORDER BY period
-            """.formatted(periodExpr, agg, q(metric), q(table), q(timeCol));
+        boolean hasDim = plan.hasDimension();
+        String baseWhere = q(timeCol) + " IS NOT NULL" + whereClause(plan);
 
-        List<Map<String, Object>> rows = datasetRepo.query(sql, plan.getLimit());
+        // 先取最近的 N 个 period（降序），再对全量行按这些 period 聚合。
+        // 升序 + LIMIT 截掉的是最早的数据，趋势洞察会基于过期时间片。
+        // Take the latest N periods first; ascending + LIMIT would keep the oldest ones.
+        String recentPeriods = "SELECT " + periodExpr + " AS period FROM " + q(table)
+                + " WHERE " + baseWhere + " GROUP BY period ORDER BY period DESC LIMIT " + Math.max(1, plan.getLimit());
+
+        List<String> selects = new ArrayList<>();
+        selects.add(periodExpr + " AS period");
+        if (hasDim) selects.add(q(plan.getDimension()) + " AS dimension");
+        for (String m : metrics) selects.add(agg + "(" + q(m) + ") AS \"" + m + "\"");
+
+        String sql = "SELECT " + String.join(", ", selects) + " FROM " + q(table)
+                + " WHERE " + baseWhere + " AND " + periodExpr + " IN (" + recentPeriods + ")"
+                + " GROUP BY period" + (hasDim ? ", dimension" : "")
+                + " ORDER BY period" + (hasDim ? ", dimension" : "");
+
+        List<Map<String, Object>> rows = datasetRepo.query(sql, Integer.MAX_VALUE);
         AnalysisResult result = base(plan, rows, sql, "趋势分析");
-        result.setChart(new ChartSpec(ChartType.LINE.getValue(), "period", List.of("value"),
-                plan.getTitle() != null ? plan.getTitle() : metric + " " + granularity.getLabel() + "趋势", rows));
+        result.setChart(new ChartSpec(ChartType.LINE.getValue(), "period",
+                hasDim ? List.of(metrics.get(0)) : metrics,
+                plan.getTitle() != null ? plan.getTitle() : metrics.get(0) + " " + granularity.getLabel() + "趋势", rows));
 
-        List<String> insights = trendInsights(rows, metric, granularity.getLabel());
+        List<String> insights = trendInsights(rows, metrics, granularity.getLabel(), hasDim);
         result.setInsights(insights);
         return result;
     }
@@ -129,11 +142,12 @@ public class AnalysisEngine {
         if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做异常识别");
 
         String groupCol = plan.hasDimension() ? plan.getDimension() : null;
+        String where = q(metric) + " IS NOT NULL" + whereClause(plan);
         String sql = groupCol == null
-                ? "SELECT CAST(%s AS VARCHAR) AS item, %s AS value FROM %s WHERE %s IS NOT NULL"
-                   .formatted(q(metric), q(metric), q(table), q(metric))
-                : "SELECT CAST(%s AS VARCHAR) AS item, %s(%s) AS value FROM %s WHERE %s IS NOT NULL GROUP BY %s"
-                   .formatted(q(groupCol), plan.getAggregation().getSql(), q(metric), q(table), q(metric), q(groupCol));
+                ? "SELECT CAST(%s AS VARCHAR) AS item, %s AS value FROM %s WHERE %s"
+                   .formatted(q(metric), q(metric), q(table), where)
+                : "SELECT CAST(%s AS VARCHAR) AS item, %s(%s) AS value FROM %s WHERE %s GROUP BY %s"
+                   .formatted(q(groupCol), plan.getAggregation().getSql(), q(metric), q(table), where, q(groupCol));
 
         List<Map<String, Object>> raw = datasetRepo.query(sql, 10000);
         List<Map<String, Object>> anomalies = detectAnomalies(raw);
@@ -144,6 +158,16 @@ public class AnalysisEngine {
 
         List<String> insights = new ArrayList<>();
         insights.add(String.format("共检测 %d 个数据点，发现 %d 个异常点", raw.size(), anomalies.size()));
+        // 上限截断必须显式提示，否则大表的漏检不可见 / Surface the cap so truncation is visible.
+        if (raw.size() >= 10000) {
+            insights.add("数据量超过检测上限，仅对前 10000 行执行了统计检验，结果可能不完整");
+        }
+        if (raw.size() < 6) {
+            // 总体标准差下单点最大 z=(n-1)/sqrt(n)，n<=5 时永远 <=2，检测必然为空。
+            // 必须说明原因，避免"0 个异常"被误解为数据正常。/ With population std the max
+            // achievable z is (n-1)/sqrt(n), so n<=5 can never trigger the threshold.
+            insights.add("样本过少（少于 6 个数据点），统计检验不可靠，请提供更多数据后再判断");
+        }
         for (int i = 0; i < Math.min(3, anomalies.size()); i++) {
             Map<String, Object> a = anomalies.get(i);
             insights.add(String.format("异常点 %s: 值 %.2f，偏离度 %.2f", a.get("item"),
@@ -161,37 +185,81 @@ public class AnalysisEngine {
      * Endpoint-only comparison hides mid-series swings; include peak/trough and range ratio
      * so the conclusion cannot mislead.
      */
-    private List<String> trendInsights(List<Map<String, Object>> rows, String metric, String granularityLabel) {
+    /**
+     * 趋势洞察 / Trend insights.
+     *
+     * <p>单序列：首尾变化 + 峰谷 + 波动幅度；多序列（带维度）：按维度汇总各序列的
+     * 最新值与期间变化，避免把不同维度的点串成一条假趋势。
+     * Single series: endpoints, peak/trough and volatility. Multi-series (dimension):
+     * per-dimension latest value and change, so points of different dimensions are
+     * never chained into one fake trend.
+     */
+    private List<String> trendInsights(List<Map<String, Object>> rows, List<String> metrics,
+                                       String granularityLabel, boolean hasDim) {
         List<String> insights = new ArrayList<>();
-        if (rows.size() < 2) return insights;
+        String metric = metrics.get(0);
+        if (hasDim) {
+            // 多序列：按维度聚合首尾 / Multi-series: per-dimension endpoints.
+            Map<String, double[]> series = new LinkedHashMap<>(); // [first, last]
+            Map<String, Double> max = new LinkedHashMap<>();
+            for (Map<String, Object> r : rows) {
+                Object v = r.get(metric);
+                if (!(v instanceof Number n)) continue;
+                String dim = String.valueOf(r.get("dimension"));
+                double d = n.doubleValue();
+                double[] fl = series.computeIfAbsent(dim, k -> new double[]{d, d});
+                fl[1] = d;
+                max.merge(dim, d, Math::max);
+            }
+            for (Map.Entry<String, double[]> e : series.entrySet()) {
+                double a = e.getValue()[0], b = e.getValue()[1];
+                String change = a != 0 ? String.format("，变化 %.1f%%", (b - a) / Math.abs(a) * 100) : "";
+                insights.add(String.format("%s：%s 期末 %.2f%s", e.getKey(), metric, b, change));
+            }
+            insights.add(String.format("共 %d 个序列、%d 个 %s，仅展示最近 %d 个 %s",
+                    series.size(), rows.size(), granularityLabel, series.size() > 0 ? distinctPeriods(rows) : 0, granularityLabel));
+            return insights;
+        }
 
-        Object first = rows.get(0).get("value"), last = rows.get(rows.size() - 1).get("value");
+        if (rows.size() < 2) return insights;
+        Object first = rows.get(0).get(metric), last = rows.get(rows.size() - 1).get(metric);
         if (!(first instanceof Number) || !(last instanceof Number)) return insights;
         double a = ((Number) first).doubleValue(), b = ((Number) last).doubleValue();
-        if (a != 0) {
+        if (a != 0 && Double.isFinite(a) && Double.isFinite(b)) {
             double change = (b - a) / Math.abs(a) * 100;
             insights.add(String.format("%s内 %s 从 %.2f 变化至 %.2f，累计变化 %.1f%%",
                     granularityLabel, metric, a, b, change));
         }
 
-        // 峰谷与波动幅度 / Peak, trough and range ratio.
-        int maxIdx = 0, minIdx = 0;
-        double max = a, min = a;
-        for (int i = 1; i < rows.size(); i++) {
-            Object v = rows.get(i).get("value");
-            if (!(v instanceof Number)) continue;
-            double d = ((Number) v).doubleValue();
-            if (d > max) { max = d; maxIdx = i; }
-            if (d < min) { min = d; minIdx = i; }
+        // 峰谷与波动幅度（跳过非有限值，防止 Infinity/NaN 污染统计）/ Peak, trough and range
+        // (skip non-finite values so Infinity/NaN cannot poison the stats).
+        int maxIdx = -1, minIdx = -1;
+        double max = Double.NEGATIVE_INFINITY, min = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < rows.size(); i++) {
+            Object v = rows.get(i).get(metric);
+            if (!(v instanceof Number n)) continue;
+            double d = n.doubleValue();
+            if (!Double.isFinite(d)) continue;
+            if (maxIdx < 0 || d > max) { max = d; maxIdx = i; }
+            if (minIdx < 0 || d < min) { min = d; minIdx = i; }
         }
-        String maxPeriod = String.valueOf(rows.get(maxIdx).get("period"));
-        String minPeriod = String.valueOf(rows.get(minIdx).get("period"));
-        insights.add(String.format("最高 %.2f（%s），最低 %.2f（%s），极差 %.2f",
-                max, maxPeriod, min, minPeriod, max - min));
-        double baseline = Math.abs(a) > 0 ? Math.abs(a) : 1;
-        insights.add(String.format("期间波动幅度约 %.1f%%（相对首期），存在明显起伏",
-                (max - min) / baseline * 100));
+        if (maxIdx >= 0 && minIdx >= 0) {
+            String maxPeriod = String.valueOf(rows.get(maxIdx).get("period"));
+            String minPeriod = String.valueOf(rows.get(minIdx).get("period"));
+            insights.add(String.format("最高 %.2f（%s），最低 %.2f（%s），极差 %.2f",
+                    max, maxPeriod, min, minPeriod, max - min));
+            double baseline = Math.abs(a) > 0 ? Math.abs(a) : 1;
+            insights.add(String.format("期间波动幅度约 %.1f%%（相对首期）",
+                    (max - min) / baseline * 100));
+        }
         return insights;
+    }
+
+    /** 统计去重后的 period 数 / Count distinct periods. */
+    private int distinctPeriods(List<Map<String, Object>> rows) {
+        Set<String> s = new LinkedHashSet<>();
+        for (Map<String, Object> r : rows) s.add(String.valueOf(r.get("period")));
+        return s.size();
     }
 
     /** Z-score + IQR 双准则异常检测 / Anomaly detection via z-score and IQR. */
@@ -245,7 +313,7 @@ public class AnalysisEngine {
         selects.add(q(dimension) + " AS dimension");
         for (String m : metrics) selects.add(agg + "(" + q(m) + ") AS \"" + m + "\"");
         String sql = "SELECT " + String.join(", ", selects) + " FROM " + q(table)
-                + whereClause(plan) + " GROUP BY " + q(dimension) + orderClause(plan);
+                + whereClause(plan) + " GROUP BY " + q(dimension) + compareOrderClause(plan, dimension, metrics);
 
         List<Map<String, Object>> rows = datasetRepo.query(sql, plan.getLimit());
         AnalysisResult result = base(plan, rows, sql, "指标对比");
@@ -256,10 +324,14 @@ public class AnalysisEngine {
         for (Map<String, Object> r : rows) {
             for (String m : metrics) {
                 Object v = r.get(m);
-                if (v instanceof Number n) {
+                if (v instanceof Number n && Double.isFinite(n.doubleValue())) {
                     double total = rows.stream().mapToDouble(x -> x.get(m) instanceof Number z ? z.doubleValue() : 0).sum();
-                    if (total > 0) insights.add(String.format("%s 的 %s 占比 %.1f%%",
-                            r.get("dimension"), m, n.doubleValue() / total * 100));
+                    // 占比只在分母为正且当前值非负时才有意义；负值/近零分母会产生 -300% 之类的荒谬数字。
+                    // A percentage only makes sense with a positive denominator and a non-negative value.
+                    if (total > 0 && n.doubleValue() >= 0) {
+                        insights.add(String.format("%s 的 %s 占比 %.1f%%",
+                                r.get("dimension"), m, n.doubleValue() / total * 100));
+                    }
                 }
             }
         }
@@ -279,8 +351,11 @@ public class AnalysisEngine {
         rows.add(stats);
 
         AnalysisResult result = base(plan, rows, "-- descriptive statistics", "数据概览");
+        // 图表列范围必须与 stats 统计范围一致，否则超出部分的列会画出高度为 0 的假柱子。
+        // The chart must cover exactly the same columns as stats, or extra columns render as zero bars.
+        List<String> charted = numeric.subList(0, Math.min(5, numeric.size()));
         List<Map<String, Object>> chartRows = new ArrayList<>();
-        for (String c : numeric) {
+        for (String c : charted) {
             Object stat = stats.get(c);
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("metric", c);
@@ -332,6 +407,24 @@ public class AnalysisEngine {
     private String orderClause(AnalysisPlan plan) {
         if (plan.getSortBy() == null || plan.getSortBy().isBlank()) return "";
         return " ORDER BY " + q(plan.getSortBy()) + " " + plan.getSortOrder().getSql();
+    }
+
+    /**
+     * compare 的 ORDER BY：sortBy 必须命中维度或指标之一，否则静默忽略并回退默认降序。
+     * 与 query 的 aggOrderClause 对齐，避免 LLM 给出不在 SELECT 中的列名时触发
+     * "column must appear in GROUP BY"。
+     * / ORDER BY for compare must reference the dimension or a metric alias; anything
+     * else is ignored with a default descending sort, mirroring aggOrderClause.
+     */
+    private String compareOrderClause(AnalysisPlan plan, String dimension, List<String> metrics) {
+        String dir = plan.getSortOrder().getSql();
+        String sortBy = plan.getSortBy();
+        if (sortBy != null && !sortBy.isBlank()) {
+            if (sortBy.equals(dimension)) return " ORDER BY dimension " + dir;
+            if (metrics.contains(sortBy)) return " ORDER BY " + q(sortBy) + " " + dir;
+        }
+        if (metrics.isEmpty()) return "";
+        return " ORDER BY " + q(metrics.get(0)) + " DESC";
     }
 
     /**

@@ -80,9 +80,14 @@ public class BertTokenizer {
         List<String> tokens = new ArrayList<>();
         tokens.add("[CLS]");
         tokens.addAll(wordpiece(text));
-        tokens.add("[SEP]");
 
-        if (tokens.size() > maxLength) tokens = new ArrayList<>(tokens.subList(0, maxLength));
+        // 截断必须给 [SEP] 留位：BERT 约定序列以 [SEP] 结尾，先整体截断会把 [SEP] 切掉，
+        // 下游模型拿到不合规输入。/ Truncation must reserve room for [SEP]: the BERT contract
+        // requires the sequence to end with it.
+        if (tokens.size() > maxLength - 1) {
+            tokens = new ArrayList<>(tokens.subList(0, maxLength - 1));
+        }
+        tokens.add("[SEP]");
 
         List<Long> ids = new ArrayList<>();
         for (String t : tokens) ids.add((long) vocab.getOrDefault(t, 100)); // 100 = [UNK]

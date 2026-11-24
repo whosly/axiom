@@ -4,6 +4,7 @@ import { UploadIcon, AddIcon, FileCopyIcon, DeleteIcon, ChartBarIcon, CloudIcon 
 import type { Dataset } from '../types';
 import { api } from '../api';
 import { DatasourcePanel } from './DatasourcePanel';
+import { confirmDialog, notifyError } from '../notify';
 
 interface Props {
   datasets: Dataset[];
@@ -38,7 +39,7 @@ export function DatasetPanel({
       const d = await api.upload(file);
       onCreated(d);
     } catch (e) {
-      alert('上传失败: ' + (e as Error).message);
+      notifyError('上传失败: ' + (e as Error).message);
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -53,7 +54,7 @@ export function DatasetPanel({
       setPasteOpen(false);
       setPasteText('');
     } catch (e) {
-      alert('导入失败: ' + (e as Error).message);
+      notifyError('导入失败: ' + (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -65,19 +66,19 @@ export function DatasetPanel({
       const d = await api.createSample();
       onCreated(d);
     } catch (e) {
-      alert('创建示例失败: ' + (e as Error).message);
+      notifyError('创建示例失败: ' + (e as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`确定删除数据集「${name}」吗？`)) return;
+    if (!(await confirmDialog('删除数据集', `确定删除「${name}」吗？删除后数据不可恢复。`))) return;
     try {
       await api.deleteDataset(id);
       onDeleted(id);
     } catch (e) {
-      alert('删除失败: ' + (e as Error).message);
+      notifyError('删除失败: ' + (e as Error).message);
     }
   };
 
@@ -86,7 +87,7 @@ export function DatasetPanel({
       const rows = await api.preview(d.id, 10);
       setPreview({ dataset: d, rows });
     } catch (e) {
-      alert('预览失败: ' + (e as Error).message);
+      notifyError('预览失败: ' + (e as Error).message);
     }
   };
 

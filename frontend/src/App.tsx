@@ -10,6 +10,7 @@ import { DatasetPanel } from './components/DatasetPanel';
 import { AnalysisMessage } from './components/AnalysisMessage';
 import { KnowledgePanel } from './components/KnowledgePanel';
 import { LlmConfigPanel } from './components/LlmConfigPanel';
+import { notifyError } from './notify';
 
 const SUGGESTIONS = [
   '分析销售额的变化趋势',
@@ -41,6 +42,14 @@ function App() {
   // 用 ref 持有 AbortController，保证 stop 按钮能中断正在进行的 SSE 请求
   // Hold the AbortController in a ref so the stop button can cancel the in-flight SSE request.
   const abortRef = useRef<AbortController | null>(null);
+  // 会话令牌：切换会话/新对话时递增，旧流的事件回调据此自我失效，
+  // 防止切换后旧流的 init/status/text 反向覆写新会话的状态（串会话）。
+  // Monotonic chat token: old streams self-invalidate after a switch, so their events
+  // can never overwrite the newly selected session's state.
+  const chatTokenRef = useRef(0);
+  // 会话加载令牌：防止快速连点历史会话时旧响应覆盖新选择（竞态保护）。
+  // Monotonic token guarding openSession against out-of-order responses.
+  const openSessionTokenRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // 加载失败与空数据必须区分，否则接口挂掉会被误显示成「还没有数据集」。
   // Distinguish load failure from empty data so a broken API is not shown as "no datasets".
@@ -85,7 +94,7 @@ function App() {
       await api.updateLlmConfig({ provider });
     } catch (e) {
       setSelectedModel(previous);
-      alert('切换模型失败 / Failed: ' + (e as Error).message);
+      notifyError('切换模型失败 / Failed: ' + (e as Error).message);
     }
   };
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -95,15 +104,28 @@ function App() {
   }, [dark]);
 
   const openSession = async (id: string) => {
+    // 切换会话必须中止进行中的流：否则旧流的 init 会把 currentSessionId 改回去，
+    // 用户随后发送的消息会写进旧会话。/ Aborting on switch is mandatory — otherwise the
+    // old stream's init event flips currentSessionId back and new messages leak into it.
+    abortRef.current?.abort();
+    const token = ++openSessionTokenRef.current;
+    setIsLoading(true);
     try {
       const s = await api.getSession(id);
+      // 竞态保护：请求期间用户又点了另一个会话，丢弃本次过期响应。
+      // Stale-response guard: a newer selection wins, drop this outdated one.
+      if (openSessionTokenRef.current !== token) return;
       setCurrentSessionId(s.id);
       setSelectedDatasetId(s.datasetId);
       setMessages(s.messages || []);
     } catch (e) { console.error(e); }
+    finally { if (openSessionTokenRef.current === token) setIsLoading(false); }
   };
 
   const startNewChat = () => {
+    abortRef.current?.abort();
+    chatTokenRef.current++;
+    openSessionTokenRef.current++;
     setCurrentSessionId(null);
     setMessages([]);
   };
@@ -127,10 +149,13 @@ function App() {
     setInput('');
     setIsLoading(true);
 
-    // 每次请求使用独立的 AbortController，避免中断旧请求时误伤新请求
-    // Use a fresh controller per request so aborting never cancels a newer request.
+    // 每次请求使用独立的 AbortController + 递增令牌；切换会话后旧流的回调全部失效。
+    // Fresh controller per request plus a monotonically increasing token: after a session
+    // switch every callback of the old stream self-invalidates.
     const controller = new AbortController();
     abortRef.current = controller;
+    const myToken = ++chatTokenRef.current;
+    const alive = () => chatTokenRef.current === myToken;
 
     const updateAssistant = (updater: (m: ChatMessage) => ChatMessage) => {
       setMessages(prev => prev.map(m => m.id === assistantMsg.id ? updater(m) : m));
@@ -139,6 +164,9 @@ function App() {
     try {
       await api.chat({ sessionId: currentSessionId || undefined, datasetId: selectedDatasetId,
         message: question, model: selectedModel }, (event: SSEEvent) => {
+        // 会话已切换：旧流的所有事件一律丢弃，绝不能写入新会话的状态。
+        // After a switch every event of the old stream must be discarded.
+        if (!alive()) return;
         switch (event.type) {
           case 'init':
             setCurrentSessionId(event.sessionId);
@@ -160,16 +188,21 @@ function App() {
             updateAssistant(m => ({ ...m, result: event.result, stage: undefined }));
             break;
           case 'chart':
-            updateAssistant(m => ({
-              ...m,
-              result: { ...(m.result || { type: '', title: '', rows: [] }), chart: event.chart },
-            }));
+            // result 事件已携带 chart（同一份），这里只在缺失时补写，
+            // 避免 notMerge 的 ECharts 被重置两次（图例/缩放状态被清空并闪烁）。
+            // / result already carries the same chart; only backfill when missing so
+            // the ECharts option is not reset twice (legend/zoom state would flash).
+            updateAssistant(m => m.result?.chart ? m
+              : { ...m, result: { ...(m.result || { type: '', title: '', rows: [] }), chart: event.chart } });
             break;
           case 'text':
             updateAssistant(m => ({ ...m, content: m.content + event.content, stage: undefined }));
             break;
           case 'done':
-            updateAssistant(m => ({ ...m, streaming: false }));
+            // 用后端持久化的助手消息 ID 校准乐观 ID；此后再无本流事件，替换是安全的。
+            // Swap in the persisted assistant message id; this is the last event of the stream.
+            setMessages(prev => prev.map(m => m.id === assistantMsg.id
+              ? { ...m, id: event.messageId, streaming: false } : m));
             loadSessions();
             break;
           case 'error':
@@ -177,22 +210,27 @@ function App() {
             break;
         }
       }, controller.signal);
-      updateAssistant(m => ({ ...m, streaming: false }));
+      if (alive()) updateAssistant(m => ({ ...m, streaming: false }));
     } catch (e) {
       // 主动取消属于用户操作，不展示为错误；仅将流式光标收尾。
       // 真实失败则移除乐观消息并恢复输入，让用户能直接重试。
       // On real failure, remove optimistic messages and restore input so the user can retry.
+      if (!alive()) return; // 已切换会话：一切 UI 恢复都交给新会话流程 / A newer session owns the UI now.
       const aborted = controller.signal.aborted;
       if (aborted) {
         updateAssistant(m => ({ ...m, content: m.content || '已停止生成', streaming: false, stage: undefined }));
       } else {
         setMessages(prev => prev.filter(m => m.id !== userMsgId && m.id !== assistantMsg.id));
         setInput(question);
-        alert('请求失败 / Request failed: ' + (e as Error).message);
+        notifyError('请求失败 / Request failed: ' + (e as Error).message);
       }
     } finally {
-      abortRef.current = null;
-      setIsLoading(false);
+      // 只有当前流仍是活跃流时才清理全局状态；否则把控制权让给切换后的新流程。
+      // Only the active stream may reset global state; a switched-away stream must not.
+      if (alive()) {
+        abortRef.current = null;
+        setIsLoading(false);
+      }
     }
   };
 
@@ -208,7 +246,7 @@ function App() {
       await api.renameSession(currentSessionId, renameTitle.trim());
       setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, title: renameTitle.trim() } : s));
       setRenameOpen(false);
-    } catch (e) { alert('重命名失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('重命名失败 / Failed: ' + (e as Error).message); }
   };
 
   const handleDatasetCreated = (d: Dataset) => {
@@ -280,7 +318,7 @@ function App() {
                         await api.deleteSession(currentSessionId);
                         setSessions(prev => prev.filter(s => s.id !== currentSessionId));
                         startNewChat();
-                      } catch (e) { alert('删除会话失败: ' + (e as Error).message); }
+                      } catch (e) { notifyError('删除会话失败: ' + (e as Error).message); }
                     }} />
                 </Tooltip>
               </>
@@ -307,7 +345,7 @@ function App() {
             <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 shadow-lg"
                 style={{ background: 'linear-gradient(135deg, #0052d9, #00a870)' }}>
-                <span className="text-3xl font-bold text-white">D</span>
+                <span className="text-3xl font-bold text-white">{APP_CONFIG.nameInitial}</span>
               </div>
               <h2 className="text-2xl font-semibold mb-2" style={{ color: 'var(--td-text-color-primary)' }}>
                 {APP_CONFIG.name}

@@ -26,7 +26,13 @@ export function parseSSEBlock(block: string): SSEEvent | null {
       case 'plan': return { type: 'plan', plan: data } as SSEEvent;
       case 'result': return { type: 'result', result: data } as SSEEvent;
       case 'chart': return { type: 'chart', chart: data } as SSEEvent;
-      default: return { type, ...(typeof data === 'object' ? data : { content: data }) } as SSEEvent;
+      // spread 顺序必须 data 在前、type 在后：部分事件 data 里自带 type 字段（如分析意图），
+      // 若被展开在后会覆盖事件类型，switch 走错分支。/ data first, type last — some payloads
+      // carry their own "type" field (e.g. analysis intent) that must not clobber the event type.
+      default: {
+        const payloadData = typeof data === 'object' && data !== null ? data : { content: data };
+        return { ...payloadData, type } as SSEEvent;
+      }
     }
   } catch {
     // 忽略格式错误的 SSE 块 / Ignore malformed SSE blocks.

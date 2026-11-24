@@ -43,6 +43,19 @@ public class ExternalDatasourceService {
     private static final Pattern WRITE_KEYWORD = Pattern.compile(
             "\\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CALL|EXEC|EXECUTE)\\b");
 
+    /** 服务端文件/程序访问函数，SELECT 开头也无法通过其余校验 / Server-side file & program access functions. */
+    private static final Pattern DANGEROUS_FUNC = Pattern.compile(
+            "\\b(pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|COPY|LOAD_FILE|"
+                    + "lo_import|lo_export|UTL_FILE|DBMS_XMLGEN|xp_cmdshell|OPENROWSET|OPENQUERY)\\b");
+
+    /** 写服务端文件的 SQL 子句 / Server-side file-write clauses (MySQL SELECT ... INTO OUTFILE). */
+    private static final Pattern INTO_FILE = Pattern.compile("\\bINTO\\s+(OUTFILE|DUMPFILE)\\b|\\bPROGRAM\\b");
+
+    /** 查询超时（秒）/ Query timeout in seconds. */
+    private static final int QUERY_TIMEOUT_SECONDS = 30;
+    /** 网络 IO 超时（毫秒）/ Socket IO timeout in milliseconds. */
+    private static final int QUERY_TIMEOUT_MS = 30_000;
+
     /**
      * 注册数据源（密码加密存储）/ Register a datasource with encrypted password.
      *
@@ -121,23 +134,46 @@ public class ExternalDatasourceService {
         if (upper.startsWith("WITH") && WRITE_KEYWORD.matcher(upper).find()) {
             throw new IllegalArgumentException("WITH 查询中不允许写操作（INSERT/UPDATE/DELETE/MERGE 等）/ Data-modifying CTE not allowed");
         }
+        // 服务端文件读写的内置函数（SELECT pg_read_file(...)、INTO OUTFILE/LOAD_FILE）必须显式拒绝：
+        // 它们以 SELECT 开头，前缀与写关键字校验都拦不住。/ Server-side file access functions start
+        // with SELECT and pass every keyword guard; they must be denied explicitly.
+        if (DANGEROUS_FUNC.matcher(upper).find() || INTO_FILE.matcher(upper).find()) {
+            throw new IllegalArgumentException("查询包含被禁止的服务端文件访问函数 / Server-side file access is forbidden");
+        }
+        // 连接 URL 白名单：仅允许 mysql/postgresql 协议，阻断自定义协议处理器的
+        // SSRF / 参数注入面。/ Protocol allowlist blocks custom JDBC handler SSRF/injection.
+        String url = ds.getJdbcUrl() == null ? "" : ds.getJdbcUrl().toLowerCase();
+        if (!(url.startsWith("jdbc:mysql:") || url.startsWith("jdbc:postgresql:"))) {
+            throw new IllegalArgumentException("仅支持 jdbc:mysql / jdbc:postgresql 连接 / Only mysql/postgresql URLs allowed");
+        }
 
         List<String> headers = new ArrayList<>();
         List<Map<String, Object>> rows = new ArrayList<>();
-        try (Connection conn = connect(ds);
-             PreparedStatement ps = conn.prepareStatement(safeSql);
-             ResultSet rs = ps.executeQuery()) {
-            ResultSetMetaData md = rs.getMetaData();
-            int cols = md.getColumnCount();
-            for (int c = 1; c <= cols; c++) headers.add(sanitize(md.getColumnLabel(c)));
-            int max = Math.max(1, Math.min(limit, 10000));
-            while (rs.next() && rows.size() < max) {
-                Map<String, Object> row = new LinkedHashMap<>();
-                for (int c = 1; c <= cols; c++) {
-                    Object v = rs.getObject(c);
-                    row.put(headers.get(c - 1), v == null ? null : String.valueOf(v));
+        try (Connection conn = connect(ds)) {
+            // 双保险：SQL 层校验之上，驱动层再强制只读 + 超时，防未知绕过。
+            // / Defense in depth: driver-level read-only + timeout on top of SQL checks.
+            try {
+                conn.setReadOnly(true);
+                conn.setNetworkTimeout(null, QUERY_TIMEOUT_MS);
+            } catch (Exception ignored) {
+                // 个别驱动不支持网络超时参数 / Some drivers reject setNetworkTimeout.
+            }
+            try (PreparedStatement ps = conn.prepareStatement(safeSql)) {
+                ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    ResultSetMetaData md = rs.getMetaData();
+                    int cols = md.getColumnCount();
+                    for (int c = 1; c <= cols; c++) headers.add(sanitize(md.getColumnLabel(c)));
+                    int max = Math.max(1, Math.min(limit, 10000));
+                    while (rs.next() && rows.size() < max) {
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        for (int c = 1; c <= cols; c++) {
+                            Object v = rs.getObject(c);
+                            row.put(headers.get(c - 1), v == null ? null : String.valueOf(v));
+                        }
+                        rows.add(row);
+                    }
                 }
-                rows.add(row);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("外部查询失败 / External query failed: " + e.getMessage(), e);

@@ -3,6 +3,7 @@ import { Button, Dialog, Input, Select, Textarea, Tag, Loading, InputNumber } fr
 import { AddIcon, DeleteIcon, RefreshIcon, CheckCircleIcon } from 'tdesign-icons-react';
 import { api } from '../api';
 import type { Dataset } from '../types';
+import { confirmDialog, notifyError } from '../notify';
 
 /** JDBC datasource management panel / JDBC 数据源管理面板. */
 
@@ -33,7 +34,7 @@ export function DatasourcePanel({ visible, onClose, onImported }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try { setDatasources(await api.listDatasources()); }
-    catch (e) { alert('加载数据源失败 / Failed: ' + (e as Error).message); }
+    catch (e) { notifyError('加载数据源失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   }, []);
 
@@ -48,7 +49,7 @@ export function DatasourcePanel({ visible, onClose, onImported }: Props) {
       setAddOpen(false);
       setForm({ name: '', type: 'mysql', jdbcUrl: '', username: '', password: '' });
       await load();
-    } catch (e) { alert('注册失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('注册失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -84,15 +85,15 @@ export function DatasourcePanel({ visible, onClose, onImported }: Props) {
       }
       onImported(dataset);
       setImportFor(null);
-    } catch (e) { alert('导入失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('导入失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 
   /** 删除数据源 / Delete datasource. */
   const remove = async (id: string, name: string) => {
-    if (!window.confirm(`确定删除数据源「${name}」吗？`)) return;
+    if (!(await confirmDialog('删除数据源', `确定删除「${name}」吗？`))) return;
     try { await api.deleteDatasource(id); await load(); }
-    catch (e) { alert('删除失败 / Failed: ' + (e as Error).message); }
+    catch (e) { notifyError('删除失败 / Failed: ' + (e as Error).message); }
   };
 
   return (

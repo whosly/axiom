@@ -72,6 +72,7 @@ public class MetadataRepository {
 
     // ---- datasets ----
 
+    @org.springframework.transaction.annotation.Transactional
     public void saveDataset(Dataset d, String columnsJson) {
         jdbc.update("DELETE FROM datasets WHERE id = ?", d.getId());
         jdbc.update("""
@@ -118,6 +119,7 @@ public class MetadataRepository {
 
     // ---- sessions ----
 
+    @org.springframework.transaction.annotation.Transactional
     public void saveSession(ChatSession s) {
         jdbc.update("DELETE FROM sessions WHERE id = ?", s.getId());
         jdbc.update("""
@@ -139,7 +141,10 @@ public class MetadataRepository {
                     s.setUpdatedAt(LocalDateTime.parse(rs.getString("updated_at")));
                     return s;
                 });
-        for (ChatSession s : sessions) s.setMessages(listMessages(s.getId()));
+        // 列表页不再加载消息：此前每个会话都拉全部消息含完整 payload（N+1），
+        // 会话一多列表接口必然超时；消息详情由 GET /api/sessions/{id} 按需加载。
+        // / The list endpoint must not load messages: per-session full payload loading
+        // (N+1) makes the sidebar O(session × messages). Details come from the detail API.
         return sessions;
     }
 
@@ -160,6 +165,7 @@ public class MetadataRepository {
         return s;
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public void deleteSession(String id) {
         jdbc.update("DELETE FROM messages WHERE session_id = ?", id);
         jdbc.update("DELETE FROM sessions WHERE id = ?", id);
@@ -171,6 +177,7 @@ public class MetadataRepository {
 
     // ---- messages ----
 
+    @org.springframework.transaction.annotation.Transactional
     public void saveMessage(String sessionId, ChatMessage m, String payloadJson) {
         jdbc.update("DELETE FROM messages WHERE id = ?", m.getId());
         jdbc.update("""

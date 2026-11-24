@@ -38,6 +38,15 @@ public class KnowledgeVectorStore {
     /** Zvec Collection 对象，对应 knowledge_base / Zvec collection for knowledge_base. */
     private Collection collection;
 
+    /**
+     * Zvec native 调用的串行锁 / Serializes all native Collection calls.
+     *
+     * <p>与 VectorService 相同的原因：flush/query 并发可能读到中间态，
+     * native 线程安全性未指定，统一串行化。/ Same rationale as VectorService:
+     * concurrent flush/query can observe intermediate states; serialize everything.
+     */
+    private final Object zvecLock = new Object();
+
     /** collection 是否就绪 / Whether the collection is ready. */
     private boolean ready = false;
 
@@ -94,36 +103,52 @@ public class KnowledgeVectorStore {
     private CollectionSchema buildSchema() {
         CollectionSchema schema = new CollectionSchema(props.getZvec().getKnowledgeCollection());
 
-        // 稠密向量字段，HNSW + COSINE 索引 / Dense vector field with HNSW + COSINE index.
-        FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
-                props.getZvec().getDimension());
-        try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
-            vectorField.setIndexParams(hnsw);
+        // 每个 FieldSchema 都持 native 资源，必须逐个 try-with-resources 释放；
+        // 此前 8 个字段全都没有 close，属于成批的泄漏。/ Every FieldSchema holds native
+        // memory and must be released; previously none of the eight were closed.
+        try (FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
+                props.getZvec().getDimension())) {
+            try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
+                vectorField.setIndexParams(hnsw);
+            }
+            schema.addField(vectorField);
         }
-        schema.addField(vectorField);
 
         // 标量字段：kind/title/content/sourceId/datasetId 均为可过滤或返回字段
         // Scalar fields: kind/title/content/sourceId/datasetId are filterable or returned.
-        schema.addField(new FieldSchema("kind", DataType.STRING, true, 0));
-        schema.addField(new FieldSchema("title", DataType.STRING, true, 0));
+        try (FieldSchema kindField = new FieldSchema("kind", DataType.STRING, true, 0)) {
+            schema.addField(kindField);
+        }
+        try (FieldSchema titleField = new FieldSchema("title", DataType.STRING, true, 0)) {
+            schema.addField(titleField);
+        }
 
         // content 必须建 FTS 索引：hybridSearch 的 jieba 全文召回子查询要求该字段
         // 具备 FTS 索引，否则查询报 "fts requires an FTS-indexed field"。
         // tokenizer 用 Zvec 内置的 "jieba"（中文分词），filters 传空数组。
         // content needs an FTS index: the jieba FTS sub-query requires it, otherwise
         // "fts requires an FTS-indexed field" is thrown. Use Zvec's built-in "jieba".
-        FieldSchema contentField = new FieldSchema("content", DataType.STRING, true, 0);
-        try (IndexParams fts = IndexParams.createFTS("jieba", new String[0], null)) {
-            contentField.setIndexParams(fts);
+        try (FieldSchema contentField = new FieldSchema("content", DataType.STRING, true, 0)) {
+            try (IndexParams fts = IndexParams.createFTS("jieba", new String[0], null)) {
+                contentField.setIndexParams(fts);
+            }
+            schema.addField(contentField);
         }
-        schema.addField(contentField);
 
-        schema.addField(new FieldSchema("sourceId", DataType.STRING, true, 0));
-        schema.addField(new FieldSchema("datasetId", DataType.STRING, true, 0));
-        schema.addField(new FieldSchema("tags", DataType.STRING, true, 0));
+        try (FieldSchema sourceIdField = new FieldSchema("sourceId", DataType.STRING, true, 0)) {
+            schema.addField(sourceIdField);
+        }
+        try (FieldSchema datasetIdField = new FieldSchema("datasetId", DataType.STRING, true, 0)) {
+            schema.addField(datasetIdField);
+        }
+        try (FieldSchema tagsField = new FieldSchema("tags", DataType.STRING, true, 0)) {
+            schema.addField(tagsField);
+        }
 
         // chunkIndex 为整数字段，支持按分块顺序过滤 / chunkIndex is an int field for chunk-order filtering.
-        schema.addField(new FieldSchema("chunkIndex", DataType.INT32, true, 0));
+        try (FieldSchema chunkField = new FieldSchema("chunkIndex", DataType.INT32, true, 0)) {
+            schema.addField(chunkField);
+        }
         return schema;
     }
 
@@ -163,8 +188,10 @@ public class KnowledgeVectorStore {
 
             docs = new ArrayList<>();
             docs.add(doc);
-            collection.upsert(docs);
-            collection.flush();
+            synchronized (zvecLock) {
+                collection.upsert(docs);
+                collection.flush();
+            }
             return true;
         } catch (Exception e) {
             log.warn("[KnowledgeVector] upsert failed for {}: {}", entry.getId(), e.getMessage());
@@ -232,7 +259,10 @@ public class KnowledgeVectorStore {
                 multi.setRerankRrf(1);
                 if (filter != null) multi.setFilter(filter);
 
-                List<Doc> results = collection.query(multi);
+                List<Doc> results;
+                synchronized (zvecLock) {
+                    results = collection.query(multi);
+                }
                 try {
                     List<Hit> hits = new ArrayList<>();
                     for (Doc d : results) {
@@ -277,8 +307,10 @@ public class KnowledgeVectorStore {
     public void deleteBySource(String sourceId) {
         if (!ready) return;
         try {
-            collection.deleteByFilter("sourceId = '" + escape(sourceId) + "'");
-            collection.flush();
+            synchronized (zvecLock) {
+                collection.deleteByFilter("sourceId = '" + escape(sourceId) + "'");
+                collection.flush();
+            }
         } catch (Exception e) {
             log.warn("[KnowledgeVector] delete by source failed: {}", e.getMessage());
         }
@@ -288,8 +320,10 @@ public class KnowledgeVectorStore {
     public void delete(String id) {
         if (!ready) return;
         try {
-            collection.delete(List.of(id));
-            collection.flush();
+            synchronized (zvecLock) {
+                collection.delete(List.of(id));
+                collection.flush();
+            }
         } catch (Exception e) {
             log.warn("[KnowledgeVector] delete failed for {}: {}", id, e.getMessage());
         }

@@ -14,7 +14,12 @@ WORKDIR /build/frontend
 
 # 先复制依赖清单，利用 Docker 缓存 / Copy manifests first for layer caching
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+# 严格使用 npm ci：锁文件不存在时直接失败，而不是静默 npm install 生成
+# 不可复现的依赖树。/ Fail hard when the lockfile is missing instead of silently
+# falling back to npm install and producing an unreproducible dependency tree.
+RUN if [ ! -f package-lock.json ]; then \
+      echo "ERROR: frontend/package-lock.json is required for reproducible builds" && exit 1; \
+    fi && npm ci --no-audit --no-fund
 
 COPY frontend/ ./
 RUN npm run build
@@ -53,6 +58,13 @@ WORKDIR /app
 # eclipse-temurin:17-jre 基于 Debian，用 apt / Based on Debian, use apt.
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# 以非 root 运行：应用自身无鉴权，root 容器被逃逸后等于主机 root。
+# / Run as a non-root user: the app is unauthenticated, so a container escape
+# must not yield host root.
+RUN groupadd -r axiom && useradd -r -g axiom axiom \
+    && mkdir -p /app/data && chown -R axiom:axiom /app
+USER axiom
 
 # 复制可执行 jar / Copy executable jar
 COPY --from=backend-builder /build/backend/target/axiom-1.0.0.jar /app/app.jar

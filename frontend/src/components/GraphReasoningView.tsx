@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, InputNumber, Select, Tag, Loading, Empty } from 'tdesign-react';
 import { SearchIcon } from 'tdesign-icons-react';
 import { api } from '../api';
+import { notifyError } from '../notify';
 
 /** 图谱推理视图 / Graph reasoning view: communities, shortest path and related entries. */
 
@@ -45,7 +46,7 @@ export function GraphReasoningView() {
       setCommunities(r.communities || []);
       setIterations(r.iterations || 0);
       setSampling({ sampled: !!r.sampled, total: r.totalNodes || 0, analyzed: r.analyzedNodes || 0 });
-    } catch (e) { alert('社区发现失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('社区发现失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   }, []);
 
@@ -56,7 +57,7 @@ export function GraphReasoningView() {
     if (!from || !to) return;
     setLoading(true);
     try { setPath(await api.graphPath(from, to)); }
-    catch (e) { alert('路径查询失败 / Failed: ' + (e as Error).message); }
+    catch (e) { notifyError('路径查询失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -65,7 +66,7 @@ export function GraphReasoningView() {
     if (!entryId) return;
     setLoading(true);
     try { setRelated((await api.graphRelated(entryId, limit)).related || []); }
-    catch (e) { alert('关联分析失败 / Failed: ' + (e as Error).message); }
+    catch (e) { notifyError('关联分析失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 

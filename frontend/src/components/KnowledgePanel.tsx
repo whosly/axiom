@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Button, Input, Textarea, Select, Tag, Dialog, Loading, Tooltip } from 'tdesign-react';
 import { AddIcon, SearchIcon, DeleteIcon, BookIcon, BrowseIcon, RefreshIcon } from 'tdesign-icons-react';
 import { api } from '../api';
@@ -9,6 +9,7 @@ const KnowledgeGraphView = lazy(() => import('./KnowledgeGraphView').then(m => (
 import { GraphReasoningView } from './GraphReasoningView';
 import { KnowledgeSourcesView } from './KnowledgeSourcesView';
 import { ZvecInspectorView } from './ZvecInspectorView';
+import { confirmDialog, notifyError, notifySuccess } from '../notify';
 
 /**
  * 知识库管理面板 / Knowledge base management panel.
@@ -66,9 +67,9 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
     setBusy(true);
     try {
       const result = await api.ingestDocument(file, datasetId || undefined);
-      alert(`文档入库完成 / Document ingested：${result.chunks} 块 / chunks，${result.added} 条 / entries`);
+      notifySuccess(`文档入库完成 / Document ingested：${result.chunks} 块 / chunks，${result.added} 条 / entries`);
       await refresh();
-    } catch (e) { alert('文档入库失败 / Ingest failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('文档入库失败 / Ingest failed: ' + (e as Error).message); }
     finally { setBusy(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   };
 
@@ -77,9 +78,9 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
     setReindexing(true);
     try {
       const result = await api.reindexKnowledge(force);
-      alert('向量重建完成 / Reindex done: ' + JSON.stringify(result));
+      notifySuccess('向量重建完成 / Reindex done: ' + JSON.stringify(result));
       await refresh();
-    } catch (e) { alert('向量重建失败 / Reindex failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('向量重建失败 / Reindex failed: ' + (e as Error).message); }
     finally { setReindexing(false); }
   };
 
@@ -93,7 +94,7 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
       setAddOpen(false);
       setForm({ kind: 'metric', title: '', content: '', formula: '' });
       await refresh();
-    } catch (e) { alert('录入失败: ' + (e as Error).message); }
+    } catch (e) { notifyError('录入失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
 
@@ -103,17 +104,17 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
     // 传入当前数据集，让检索测试台的结果与真实分析链路的知识范围一致。
     // Pass the active dataset so test results match what the analysis pipeline actually sees.
     try { setHits(await api.searchKnowledge(query, undefined, 5, datasetId || undefined)); }
-    catch (e) { alert('检索失败: ' + (e as Error).message); }
+    catch (e) { notifyError('检索失败: ' + (e as Error).message); }
     finally { setBusy(false); }
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm('确定删除这条知识吗？')) return;
+    if (!(await confirmDialog('删除知识', '确定删除这条知识吗？'))) return;
     try {
       await api.deleteKnowledge(id);
       await refresh();
     } catch (e) {
-      alert('删除失败: ' + (e as Error).message);
+      notifyError('删除失败: ' + (e as Error).message);
     }
   };
 
@@ -122,7 +123,7 @@ export function KnowledgePanel({ datasetId, onClose }: Props) {
     setDetailLoading(true);
     setDetail({} as Record<string, any>);
     try { setDetail(await api.getKnowledgeDetail(id)); }
-    catch (e) { alert('加载详情失败: ' + (e as Error).message); setDetail(null); }
+    catch (e) { notifyError('加载详情失败: ' + (e as Error).message); setDetail(null); }
     finally { setDetailLoading(false); }
   };
 

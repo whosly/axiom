@@ -1,5 +1,7 @@
 package com.axiom.config;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
@@ -7,7 +9,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -15,6 +18,11 @@ import javax.sql.DataSource;
  * Explicit dual-datasource setup.
  * Spring Boot's default DataSourceAutoConfiguration is excluded globally in the main class
  * so that both DuckDB (analytics) and H2/SQLite (metadata) can coexist.
+ *
+ * <p>两个数据源都改用 Hikari 连接池：此前 DriverManagerDataSource 每次取连接都物理新建，
+ * DuckDB 嵌入式引擎每查询重建，代价极高。/ Both pools replace DriverManagerDataSource,
+ * which opened a physical connection per checkout and re-built the embedded DuckDB engine
+ * per query.
  */
 @Configuration
 public class DataSourceConfig {
@@ -36,33 +44,52 @@ public class DataSourceConfig {
         }
     }
 
-    @Bean(name = "duckDataSource")
+    @Bean(name = "duckDataSource", destroyMethod = "close")
     public DataSource duckDataSource(AppProperties props) {
         ensureParentDir(props.getStorage().getDuckdbPath());
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.duckdb.DuckDBDriver");
         String path = props.getStorage().getDuckdbPath();
-        ds.setUrl(path.startsWith("jdbc:") ? path : "jdbc:duckdb:" + path);
-        return ds;
+        String url = path.startsWith("jdbc:") ? path : "jdbc:duckdb:" + path;
+        HikariConfig cfg = new HikariConfig();
+        cfg.setDriverClassName("org.duckdb.DuckDBDriver");
+        cfg.setJdbcUrl(url);
+        // DuckDB 嵌入式引擎单写多读，小池即可；过大会在 native 层排队。
+        // / The embedded engine is single-writer; a small pool avoids native-level queuing.
+        cfg.setMaximumPoolSize(4);
+        cfg.setPoolName("axiom-duckdb");
+        return new HikariDataSource(cfg);
     }
 
-    @Bean(name = "metaDataSource")
+    @Bean(name = "metaDataSource", destroyMethod = "close")
     @Primary
     public DataSource metaDataSource(AppProperties props) {
-        DriverManagerDataSource ds = new DriverManagerDataSource();
+        HikariConfig cfg = new HikariConfig();
         String type = props.getStorage().getMetadataType().toLowerCase();
         if ("sqlite".equals(type)) {
             ensureParentDir(props.getStorage().getSqliteUrl());
-            ds.setDriverClassName("org.sqlite.JDBC");
-            ds.setUrl(props.getStorage().getSqliteUrl());
+            cfg.setDriverClassName("org.sqlite.JDBC");
+            cfg.setJdbcUrl(props.getStorage().getSqliteUrl());
         } else {
             ensureParentDir(props.getStorage().getH2Url());
-            ds.setDriverClassName("org.h2.Driver");
-            ds.setUrl(props.getStorage().getH2Url());
+            cfg.setDriverClassName("org.h2.Driver");
+            cfg.setJdbcUrl(props.getStorage().getH2Url());
         }
-        ds.setUsername(props.getStorage().getUsername());
-        ds.setPassword(props.getStorage().getPassword());
-        return ds;
+        cfg.setUsername(props.getStorage().getUsername());
+        cfg.setPassword(props.getStorage().getPassword());
+        // SQLite 同一时刻只允许一个写者，池大只会放大 SQLITE_BUSY 竞争。
+        // / SQLite allows one writer at a time; a larger pool only amplifies SQLITE_BUSY.
+        cfg.setMaximumPoolSize(2);
+        cfg.setPoolName("axiom-meta");
+        return new HikariDataSource(cfg);
+    }
+
+    /**
+     * 元数据事务管理器：支撑 DELETE+INSERT 类多步写的原子性。
+     * / Transaction manager for the metadata store, enabling atomic multi-step writes.
+     */
+    @Bean(name = "metaTransactionManager")
+    @Primary
+    public PlatformTransactionManager metaTransactionManager(@Qualifier("metaDataSource") DataSource ds) {
+        return new DataSourceTransactionManager(ds);
     }
 
     @Bean(name = "duckJdbcTemplate")

@@ -14,7 +14,10 @@ services:
     image: axiom:latest
     container_name: axiom
     ports:
-      - "${APP_PORT:-8080}:8080"
+      # 仅绑定回环地址：应用无鉴权，公网暴露必须经 prod overlay 的 Nginx HTTPS。
+      # / Bind to loopback only: the app has no auth; public exposure must go through
+      # the prod overlay's Nginx HTTPS.
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
     volumes:
       # 持久化数据：H2/DuckDB/Zvec/模型 / Persistent data
       - axiom-data:/app/data

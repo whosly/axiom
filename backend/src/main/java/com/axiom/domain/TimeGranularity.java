@@ -18,7 +18,10 @@ import java.util.Arrays;
 public enum TimeGranularity {
     HOUR("hour", "hour", "%Y-%m-%d %H:00", "小时"),
     DAY("day", "day", "%Y-%m-%d", "日"),
-    WEEK("week", "week", "%Y-W%V", "周"),
+    // %G 是 ISO 年份：跨年周（如 2024-12-31 属 ISO 2025-W01）必须配 %G 而非 %Y，否则
+    // 同一 ISO 周会被拆到两个年份、排序错乱。/ %G is the ISO year; ISO weeks spanning a
+    // year boundary must use %G, or the same week splits across two years and mis-sorts.
+    WEEK("week", "week", "%G-W%V", "周"),
     MONTH("month", "month", "%Y-%m", "月"),
     QUARTER("quarter", "quarter", "%Y-Q%q", "季度"),
     YEAR("year", "year", "%Y", "年");

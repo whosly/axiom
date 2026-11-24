@@ -36,7 +36,10 @@ export interface AnalysisPlan {
 }
 
 export interface ChartSpec {
-  type: 'line' | 'bar' | 'pie' | 'scatter';
+  // table 是 LLM 可输出的合法类型；引擎多数场景会转 bar，但契约上必须覆盖。
+  // / 'table' is a valid LLM-planned type; the engine usually converts it to bar,
+  // but the contract must cover it.
+  type: 'line' | 'bar' | 'pie' | 'scatter' | 'table';
   xField: string;
   yFields: string[];
   title: string;

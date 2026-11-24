@@ -26,6 +26,30 @@ public class AnalysisOrchestrator {
     private final RuleBasedPlanner rulePlanner;
     /** 知识库服务：在 plan/conclude 阶段注入业务知识 / Knowledge service: injects business knowledge into plan/conclude prompts. */
     private final KnowledgeService knowledgeService;
+    /** 全局配置：读取热更新后的 temperature/maxTokens / Global config for hot-updated LLM params. */
+    private final com.axiom.config.AppProperties props;
+
+    /**
+     * 构造对话选项，参数取自当前厂商的热更新配置 / Build chat options from the active
+     * provider's hot-updated parameters.
+     *
+     * <p>此前 temperature/maxTokens 硬编码（0.1/1024、0.3/1024），配置面板的改动
+     * 完全不生效。此处以配置面板值为准，仅在配置缺失时使用调用方的默认值。
+     * / Hard-coded values meant runtime config changes had no effect; panel values
+     * win now, with the caller's defaults only as a fallback.
+     *
+     * @param llm        当前厂商 / Active provider.
+     * @param defaultTemp 兜底温度 / Fallback temperature.
+     * @param defaultMaxTokens 兜底最大 token / Fallback max tokens.
+     * @param stream     是否流式 / Whether streaming.
+     * @return 对话选项 / Chat options.
+     */
+    private ChatOptions options(LlmProvider llm, double defaultTemp, int defaultMaxTokens, boolean stream) {
+        var cfg = props.getLlm().getProviders().get(llm.providerName());
+        double temp = cfg != null ? cfg.getTemperature() : defaultTemp;
+        int maxTokens = cfg != null && cfg.getMaxTokens() > 0 ? cfg.getMaxTokens() : defaultMaxTokens;
+        return new ChatOptions(llm.chatModel(), temp, maxTokens, stream);
+    }
 
     /** Whether the active LLM provider has a usable API key. */
     private boolean llmAvailable() {
@@ -80,7 +104,7 @@ public class AnalysisOrchestrator {
         sb.append("用户问题: ").append(question);
 
         String model = llm.chatModel();
-        ChatOptions options = new ChatOptions(model, 0.1, 1024, true);
+        ChatOptions options = options(llm, 0.1, 1024, true);
 
         try {
             String response = llm.chat(List.of(ChatMessage.user(sb.toString())), options);
@@ -92,12 +116,70 @@ public class AnalysisOrchestrator {
             if (plan.getAggregation() == null) plan.setAggregation(com.axiom.domain.Aggregation.SUM);
             if (plan.getTimeGranularity() == null) plan.setTimeGranularity(com.axiom.domain.TimeGranularity.MONTH);
             if (plan.getSortOrder() == null) plan.setSortOrder(com.axiom.domain.SortOrder.DESC);
+            // 对 LLM 输出做 schema 校验：幻觉字段剔除，关键字段全部无效时抛错降级规则引擎。
+            // Validate against the real schema: drop hallucinated fields; degrade if nothing valid remains.
+            validatePlan(dataset, plan);
             log.info("[Plan] intent={} metrics={} dim={}", plan.getIntent(), plan.getMetrics(), plan.getDimension());
             return plan;
         } catch (Exception e) {
             log.warn("[Plan] LLM call/parse failed, falling back to rules: {}", e.getMessage());
             return rulePlanner.plan(dataset, question);
         }
+    }
+
+    /**
+     * 按 dataset 真实列校验并修正计划 / Validate the plan against actual dataset columns.
+     *
+     * <p>LLM 幻觉的列名（metrics/dimension/timeColumn/sortBy/filters key）如果放行，
+     * 要么在 SQL 阶段报错，要么更糟——被静默忽略后返回错误答案。这里统一剔除无效项：
+     * 剔除后仍缺少必要字段时抛 IllegalArgumentException，由调用方降级到规则引擎。
+     * / Hallucinated column names either fail the SQL or worse get silently ignored and
+     * return wrong answers. Invalid entries are dropped here; if required fields become
+     * empty an IllegalArgumentException triggers the rule-based fallback.
+     */
+    private void validatePlan(Dataset dataset, AnalysisPlan plan) {
+        Set<String> names = dataset.getColumns().stream().map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+        Set<String> numericNames = dataset.getColumns().stream()
+                .filter(c -> "numeric".equals(c.getType())).map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+
+        // 过滤幻觉指标；COUNT 可以作用于任意列，其余聚合要求 numeric。
+        // Drop hallucinated metrics; COUNT may target any column, other aggregates need numeric.
+        List<String> metrics = plan.getMetrics() == null ? List.of() : plan.getMetrics().stream()
+                .filter(m -> m != null && names.contains(m))
+                .filter(m -> "count".equalsIgnoreCase(plan.getAggregation() == null ? "" : plan.getAggregation().getValue())
+                        || numericNames.contains(m))
+                .distinct().toList();
+        plan.setMetrics(metrics);
+
+        // dimension/timeColumn/sortBy：不存在或类型不符时置空（引擎会自动回退默认列）。
+        // Null out invalid dimension/timeColumn/sortBy; the engine falls back to defaults.
+        if (plan.getDimension() != null && (!names.contains(plan.getDimension())
+                || "numeric".equals(typeOf(dataset, plan.getDimension())))) {
+            plan.setDimension(null);
+        }
+        if (plan.getTimeColumn() != null && !"temporal".equals(typeOf(dataset, plan.getTimeColumn()))) {
+            plan.setTimeColumn(null);
+        }
+        if (plan.getSortBy() != null && !names.contains(plan.getSortBy())) {
+            plan.setSortBy(null);
+        }
+        // 过滤幻觉过滤条件 / Drop hallucinated filters.
+        if (plan.getFilters() != null) {
+            plan.getFilters().keySet().retainAll(names);
+            if (plan.getFilters().isEmpty()) plan.setFilters(null);
+        }
+
+        // 关键字段全部无效 → 计划不可执行，抛错走规则引擎 / No usable metrics left → degrade.
+        boolean needsMetrics = plan.getIntent() != com.axiom.domain.AnalysisIntent.SUMMARY;
+        if (needsMetrics && metrics.isEmpty()) {
+            throw new IllegalArgumentException("计划中的指标列均不存在于数据集");
+        }
+    }
+
+    private String typeOf(Dataset dataset, String column) {
+        return dataset.getColumns().stream()
+                .filter(c -> c.getName().equals(column)).findFirst()
+                .map(ColumnInfo::getType).orElse(null);
     }
 
     /** Step 2: execute the plan deterministically. */
@@ -146,14 +228,25 @@ public class AnalysisOrchestrator {
             """);
 
         String model = llm.chatModel();
-        ChatOptions options = new ChatOptions(model, 0.3, 1024, false);
+        ChatOptions options = options(llm, 0.3, 1024, false);
         StringBuilder full = new StringBuilder();
         Consumer<String> collector = token -> { full.append(token); if (tokenConsumer != null) tokenConsumer.accept(token); };
 
-        if (tokenConsumer != null) {
-            llm.chatStream(List.of(ChatMessage.user(context.toString())), options, collector);
-        } else {
-            collector.accept(llm.chat(List.of(ChatMessage.user(context.toString())), options));
+        try {
+            if (tokenConsumer != null) {
+                llm.chatStream(List.of(ChatMessage.user(context.toString())), options, collector);
+            } else {
+                collector.accept(llm.chat(List.of(ChatMessage.user(context.toString())), options));
+            }
+        } catch (Exception e) {
+            // plan 有降级路径，conclude 也必须有；否则流式场景会把半截 LLM 文本当最终结论。
+            // 已推送部分 token 时明确标记中断，再补一段规则结论；一个 token 都没有则直接用规则结论。
+            // / The conclude stage needs a fallback just like plan. If some tokens were already
+            // streamed, mark the interruption and append the rule-based conclusion; if nothing
+            // was streamed, use the rule conclusion directly.
+            log.warn("[Conclude] LLM failed, falling back to rules: {}", e.getMessage());
+            if (full.length() > 0) collector.accept("\n\n[模型连接中断，以下为规则引擎补充结论 / LLM interrupted, rule-based conclusion follows]\n");
+            collector.accept(rulePlanner.conclude(dataset, question, plan, result));
         }
         String conclusion = full.toString();
         result.setConclusion(conclusion);
@@ -169,13 +262,33 @@ public class AnalysisOrchestrator {
         if (plan.getDimension() != null) sb.append(" 维度=").append(plan.getDimension());
         sb.append("\n结论: ").append(result.getConclusion() != null ? result.getConclusion() : "");
 
-        vectors.upsert(UUID.randomUUID().toString(), "history", dataset.getId(), sb.toString());
-        vectors.upsert(UUID.randomUUID().toString(), "conclusion", dataset.getId(),
-                dataset.getName() + ": " + (result.getConclusion() != null ? result.getConclusion() : ""));
+        String historyText = sb.toString();
+        String conclusionText = dataset.getName() + ": "
+                + (result.getConclusion() != null ? result.getConclusion() : "");
+
+        // 向量主键用内容哈希派生：Zvec upsert 按 PK 覆盖，同内容反复分析只保留一份，
+        // 不再随分析次数无限膨胀。/ Deterministic PKs derived from content: Zvec upsert
+        // overwrites by PK, so repeated identical analyses converge to one vector.
+        vectors.upsert("history-" + shortHash(historyText), "history", dataset.getId(), historyText);
+        vectors.upsert("concl-" + shortHash(conclusionText), "conclusion", dataset.getId(), conclusionText);
 
         // 同时沉淀为知识库的 case 条目，供跨会话的 few-shot 检索使用
         // Also distill into the knowledge base as a case entry for cross-session few-shot retrieval.
         knowledgeService.addFromAnalysis(dataset, question, plan, result);
+    }
+
+    /** SHA-256 前 32 位十六进制，用作向量主键 / 32-hex prefix of SHA-256, used as vector PK. */
+    private String shortHash(String text) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 16; i++) sb.append(String.format("%02x", digest[i]));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // SHA-256 在所有 JDK 中必然存在，理论不可达 / SHA-256 always exists in the JDK.
+            return Integer.toHexString(text.hashCode());
+        }
     }
 
     /** Index all dataset columns with their semantic descriptions. */

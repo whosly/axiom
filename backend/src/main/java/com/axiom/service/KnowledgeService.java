@@ -53,6 +53,9 @@ public class KnowledgeService {
     /** 知识来源元数据仓储 / Knowledge source metadata repository. */
     private final KnowledgeSourceRepository sourceRepository;
 
+    /** reindex 与用户写入的互斥锁 / Mutual exclusion between reindex and user writes. */
+    private final Object reindexLock = new Object();
+
     public KnowledgeService(KnowledgeRepository repository, KnowledgeVectorStore vectorStore,
                             MetadataRepository metadataRepository, KnowledgeTokenizer tokenizer,
                             AppProperties props, RerankService rerankService,
@@ -264,6 +267,16 @@ public class KnowledgeService {
         if (plan.getDimension() != null) sb.append("维度: ").append(plan.getDimension()).append("\n");
         sb.append("结论: ").append(result.getConclusion() == null ? "" : result.getConclusion());
 
+        // 幂等去重：相同 问答+结论 直接复用已有条目，避免同一问题反复沉淀出近似 case。
+        // 与 addBatch 的去重语义对齐。/ Idempotent: identical question+conclusion reuses the
+        // existing case entry, aligned with the addBatch dedup semantics.
+        String textHash = sha256(sb.toString());
+        KnowledgeEntry existing = repository.findByHash(textHash);
+        if (existing != null) {
+            log.debug("[Knowledge] analysis case already exists (hash match), skipping: {}", existing.getId());
+            return;
+        }
+
         LocalDateTime now = LocalDateTime.now();
         KnowledgeEntry entry = KnowledgeEntry.builder()
                 .id(UUID.randomUUID().toString())
@@ -303,9 +316,10 @@ public class KnowledgeService {
             candidates = vectorStore.hybridSearch(query, kind, datasetId, candidateSize);
         }
         if (candidates.isEmpty()) {
-            // 向量检索无结果时降级为倒排索引关键词匹配 / Fall back to inverted-index keyword search.
+            // 向量检索无结果时降级为倒排索引关键词匹配（保持同一 datasetId 边界）
+            // Fall back to inverted-index keyword search under the same dataset boundary.
             log.debug("[Knowledge] vector search returned no hits, trying keyword fallback");
-            candidates = keywordFallback(query, kind, Math.max(topK, props.getRerank().getCandidateSize()));
+            candidates = keywordFallback(query, kind, datasetId, Math.max(topK, props.getRerank().getCandidateSize()));
         }
         // 重排精排 / Rerank refinement.
         return rerankService.rerank(query, candidates, topK);
@@ -325,24 +339,34 @@ public class KnowledgeService {
         List<KnowledgeVectorStore.Hit> hits = search(question, null, datasetId, 5);
         if (hits.isEmpty()) return "";
 
+        // 相关性阈值：低于阈值的命中视为噪音（如分数全 0 的无关条目），不注入 prompt。
+        // 把不可信内容标为"权威知识"比不注入更危险。/ Noise floor: hits below the threshold
+        // (e.g. all-zero scores) are excluded — injecting untrusted content as "authoritative"
+        // knowledge is worse than injecting nothing.
+        float minScore = 0.05f;
+        List<KnowledgeVectorStore.Hit> relevant = hits.stream()
+                .filter(h -> h.getScore() >= minScore).toList();
+        if (relevant.isEmpty()) return "";
+
         int budget = props.getRerank().getContextCharBudget();
         StringBuilder sb = new StringBuilder();
         sb.append("以下是知识库中与问题相关的知识（请优先参考，不要编造）：\n");
-        sb.append("Relevant knowledge from the knowledge base (prioritize these, do not fabricate):\n");
         int used = sb.length();
         Set<String> seen = new java.util.LinkedHashSet<>();
+        int index = 0;
 
-        for (KnowledgeVectorStore.Hit h : hits) {
+        for (KnowledgeVectorStore.Hit h : relevant) {
             // 去重：相同标题+内容只保留一条 / Deduplicate by title+content.
             String key = (h.getTitle() == null ? "" : h.getTitle()) + "|"
                     + (h.getContent() == null ? "" : h.getContent());
             if (!seen.add(key)) continue;
 
-            String line = "[" + (seen.size()) + "] [" + h.getKind() + "] "
+            String line = "[" + (++index) + "] [" + h.getKind() + "] "
                     + (h.getTitle() == null ? "" : h.getTitle()) + ": "
                     + (h.getContent() == null ? "" : h.getContent()) + "\n";
-            // 字符预算：超出则截断并停止，防止撑爆 LLM prompt / Stop at char budget.
-            if (used + line.length() > budget) break;
+            // 字符预算：跳过超长条目继续尝试更短的相关条目，而不是丢弃全部后续命中。
+            // Skip the oversized entry but keep scanning shorter, more relevant ones.
+            if (used + line.length() > budget) continue;
             sb.append(line);
             used += line.length();
         }
@@ -355,11 +379,11 @@ public class KnowledgeService {
      * <p>向量库不可用时的兜底：简单的包含匹配，保证服务不中断。
      * Fallback when vector store is down: simple substring match to keep the service alive.
      */
-    private List<KnowledgeVectorStore.Hit> keywordFallback(String query, String kind, int topK) {
+    private List<KnowledgeVectorStore.Hit> keywordFallback(String query, String kind, String datasetId, int topK) {
         // 用倒排索引检索，命中数即相关性分数，避免全表扫描 / Search via inverted index;
         // hit count acts as relevance score, avoiding full-table scans.
         List<String> terms = tokenizer.tokenize(query);
-        List<Map<String, Object>> ranked = repository.searchByTerms(terms, topK);
+        List<Map<String, Object>> ranked = repository.searchByTerms(terms, datasetId, topK);
         List<KnowledgeVectorStore.Hit> hits = new ArrayList<>();
         for (Map<String, Object> row : ranked) {
             String entryId = String.valueOf(mapValue(row, "entry_id"));
@@ -378,6 +402,9 @@ public class KnowledgeService {
         if (hits.isEmpty()) {
             List<KnowledgeEntry> entries = kind == null ? repository.listAll() : repository.listByKind(kind);
             for (KnowledgeEntry e : entries) {
+                // 子串兜底同样遵守 datasetId 边界 / Substring fallback respects the same boundary.
+                if (datasetId != null && !datasetId.isBlank()
+                        && e.getDatasetId() != null && !datasetId.equals(e.getDatasetId())) continue;
                 String hay = (e.getTitle() == null ? "" : e.getTitle()) + " " + (e.getContent() == null ? "" : e.getContent());
                 if (hay.contains(query)) {
                     hits.add(new KnowledgeVectorStore.Hit(e.getId(), e.getKind(), e.getTitle(),
@@ -510,22 +537,31 @@ public class KnowledgeService {
      * @return 重建结果统计 / Rebuild result statistics.
      */
     public Map<String, Object> reindex(boolean force) {
-        List<KnowledgeEntry> targets = force ? repository.listAll() : repository.listPendingVector();
-        int success = 0, failed = 0;
-        for (KnowledgeEntry e : targets) {
-            // 重建倒排索引 / Rebuild inverted index.
-            repository.indexTerms(e.getId(), tokenizer.tokenize(e.getTitle() + " " + e.getContent()));
-            // 先标记 pending / Mark as pending first.
-            repository.updateStatus(e.getId(), "pending");
-            boolean ok = vectorStore.upsertWithResult(e);
-            repository.updateStatus(e.getId(), ok ? "ready" : "vector_failed");
-            if (ok) success++; else failed++;
+        // 互斥锁：启动同步线程、管理接口、用户写入三方并发时，快照里"读取后已删除"的
+        // 条目会被重新写入向量成为幽灵知识；两个 reindex 也会互相覆盖状态。
+        // / Mutual exclusion: without it, entries deleted mid-scan get re-vectorized as
+        // ghosts, and two concurrent reindexes overwrite each other's status writes.
+        synchronized (reindexLock) {
+            List<KnowledgeEntry> targets = force ? repository.listAll() : repository.listPendingVector();
+            int success = 0, failed = 0;
+            for (KnowledgeEntry e : targets) {
+                // 跳过扫描期间被软删的条目，避免幽灵向量 / Skip entries soft-deleted mid-scan.
+                KnowledgeEntry current = repository.findById(e.getId());
+                if (current == null) continue;
+                // 重建倒排索引 / Rebuild inverted index.
+                repository.indexTerms(e.getId(), tokenizer.tokenize(current.getTitle() + " " + current.getContent()));
+                // 先标记 pending / Mark as pending first.
+                repository.updateStatus(e.getId(), "pending");
+                boolean ok = vectorStore.upsertWithResult(current);
+                repository.updateStatus(e.getId(), ok ? "ready" : "vector_failed");
+                if (ok) success++; else failed++;
+            }
+            log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);
+            // 向量/倒排重建不改变知识内容与图谱结构，无需通知图谱（避免全量重建）。
+            // Vector/inverted-index rebuild does not change knowledge content or graph structure;
+            // no event is emitted, avoiding a costly full graph rebuild.
+            return Map.of("total", targets.size(), "success", success, "failed", failed);
         }
-        log.info("[Knowledge] reindex done: total={} success={} failed={}", targets.size(), success, failed);
-        // 向量/倒排重建不改变知识内容与图谱结构，无需通知图谱（避免全量重建）。
-        // Vector/inverted-index rebuild does not change knowledge content or graph structure;
-        // no event is emitted, avoiding a costly full graph rebuild.
-        return Map.of("total", targets.size(), "success", success, "failed", failed);
     }
 
     /** 删除一条知识（同时删向量）/ Delete an entry (vector included). */

@@ -110,11 +110,12 @@ class AnalysisEngineTest {
     @Test
     @DisplayName("趋势：洞察含最高/最低与波动幅度")
     void trendInsightsIncludePeaks() {
+        // 新 trend 的输出列名即指标名（AS "amount"）/ The trend output column is the metric name.
         when(datasetRepo.query(anyString(), anyInt())).thenReturn(List.of(
-                Map.of("period", "2026-01", "value", 48900.0),
-                Map.of("period", "2026-03", "value", 12450.0),
-                Map.of("period", "2026-04", "value", 66600.0),
-                Map.of("period", "2026-05", "value", 48300.0)));
+                Map.of("period", "2026-01", "amount", 48900.0),
+                Map.of("period", "2026-03", "amount", 12450.0),
+                Map.of("period", "2026-04", "amount", 66600.0),
+                Map.of("period", "2026-05", "amount", 48300.0)));
         AnalysisPlan plan = new AnalysisPlan();
         plan.setIntent(AnalysisIntent.TREND);
         plan.setMetrics(List.of("amount"));

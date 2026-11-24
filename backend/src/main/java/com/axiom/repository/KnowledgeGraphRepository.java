@@ -78,9 +78,13 @@ public class KnowledgeGraphRepository {
     /**
      * 递增图版本号：由 Service 在一次逻辑写操作完成后调用一次，避免逐条写重复递增。
      * Bump version once per logical write operation, called by the service after a batch of writes.
+     *
+     * <p>必须是单条原子 SQL：读-改-写两步在并发下会把两个递增合并成一个，
+     * 图已变但版本未变，快照缓存会长期返回旧结构。/ Must be a single atomic statement:
+     * a read-modify-write merges concurrent bumps, leaving the cache serving stale snapshots.
      */
     public void bumpVersion() {
-        jdbc.update("UPDATE kg_meta SET meta_value = ? WHERE meta_key = 'version'", String.valueOf(version() + 1));
+        jdbc.update("UPDATE kg_meta SET meta_value = CAST(CAST(meta_value AS BIGINT) + 1 AS VARCHAR) WHERE meta_key = 'version'");
     }
 
     /** 清空图（重建前）/ Clear graph (before rebuild). */

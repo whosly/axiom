@@ -28,6 +28,7 @@ public class DatasetController {
     private final DatasetRepository datasetRepo;
     private final MetadataRepository metaRepo;
     private final AnalysisOrchestrator orchestrator;
+    private final com.axiom.service.VectorService vectorService;
     private final ObjectMapper mapper;
     private final AppProperties props;
     private final LlmProviderFactory llmFactory;
@@ -116,6 +117,10 @@ public class DatasetController {
     public ResponseEntity<?> delete(@PathVariable String id) {
         Dataset d = metaRepo.getDataset(id);
         if (d == null) return ResponseEntity.status(404).body(Map.of("error", "数据集不存在"));
+        // 必须同步清理语义向量：否则已删数据集的字段语义/历史结论会继续注入后续 LLM prompt，
+        // 形成跨数据集脏上下文。/ Vectors must be removed with the dataset, or its field
+        // semantics and past conclusions keep leaking into future prompts.
+        vectorService.deleteByRefId(id);
         datasetRepo.dropTable(d.getTableName());
         metaRepo.deleteDataset(id);
         return ResponseEntity.ok(Map.of("success", true));

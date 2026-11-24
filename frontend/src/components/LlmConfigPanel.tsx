@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Dialog, Input, Tag, Loading, Select } from 'tdesign-react';
 import { api } from '../api';
+import { notifyError } from '../notify';
 
 /** 运行时 LLM 配置面板 / Runtime LLM configuration panel. */
 
@@ -41,7 +42,7 @@ export function LlmConfigPanel({ visible, onClose, onUpdated }: Props) {
   useEffect(() => {
     if (!visible) return;
     setLoading(true);
-    loadConfig().catch(e => alert('加载配置失败 / Failed: ' + (e as Error).message))
+    loadConfig().catch(e => notifyError('加载配置失败 / Failed: ' + (e as Error).message))
       .finally(() => setLoading(false));
   }, [visible]);
 
@@ -52,7 +53,7 @@ export function LlmConfigPanel({ visible, onClose, onUpdated }: Props) {
       await api.updateLlmConfig({ provider: value });
       await loadConfig();
       onUpdated?.();
-    } catch (e) { alert('切换失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('切换失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -70,7 +71,7 @@ export function LlmConfigPanel({ visible, onClose, onUpdated }: Props) {
       setMasked(String(r.apiKeyMasked || masked));
       onUpdated?.();
       onClose();
-    } catch (e) { alert('保存失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('保存失败 / Failed: ' + (e as Error).message); }
     finally { setSaving(false); }
   };
 

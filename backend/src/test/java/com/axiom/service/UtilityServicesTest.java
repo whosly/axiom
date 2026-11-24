@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 工具类服务测试 / Tests for utility services.
@@ -42,7 +43,11 @@ class UtilityServicesTest {
         String encrypted = crypto.encrypt(plain);
         assertThat(encrypted).isNotBlank().isNotEqualTo(plain);
         assertThat(crypto.decrypt(encrypted)).isEqualTo(plain);
-        assertThat(crypto.decrypt("invalid-ciphertext")).isEmpty();
+        // 解密失败必须显式抛错（不再静默回空串），否则换机器后所有密码静默变空且无法排查。
+        // / Decryption failures must surface loudly; silent empty strings hide the root cause.
+        assertThatThrownBy(() -> crypto.decrypt("invalid-ciphertext"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("凭据解密失败");
     }
 
     /** 规则计划：趋势问题映射 TREND 与时间列 / Rule planner maps trend question to TREND. */

@@ -82,8 +82,14 @@ public class CryptoService {
     /**
      * 解密 / Decrypt.
      *
+     * <p>解密失败必须显式抛错而不是静默回空串：静默空密码会以"连接失败"的面目出现，
+     * 用户排查不到根因（典型场景：换机器/换密钥后所有数据源密码同时失效）。
+     * / Decryption failure must surface: silently returning "" turns every stored password
+     * into a broken one after a machine or key change, with no root cause visible.
+     *
      * @param encrypted Base64(IV + ciphertext) / Encrypted payload.
      * @return 明文 / Plaintext.
+     * @throws IllegalStateException 密文损坏或密钥不匹配 / Corrupted ciphertext or key mismatch.
      */
     public String decrypt(String encrypted) {
         if (encrypted == null || encrypted.isEmpty()) return "";
@@ -95,8 +101,14 @@ public class CryptoService {
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, ALGORITHM), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
             return new String(cipher.doFinal(cipherText), StandardCharsets.UTF_8);
         } catch (Exception e) {
+            // 不回显密文与密钥细节，只给出可操作的修复路径 / Do not leak ciphertext or key
+            // material; give the user an actionable remedy instead.
             log.warn("[Crypto] decryption failed: {}", e.getMessage());
-            return "";
+            throw new IllegalStateException(
+                    "凭据解密失败（密文损坏或加密密钥已变更）。请删除并重新录入该数据源，"
+                            + "或设置 DATASOURCE_ENCRYPTION_KEY 为原密钥。"
+                            + " / Credential decryption failed (corrupted data or key changed). "
+                            + "Re-register the datasource or set DATASOURCE_ENCRYPTION_KEY to the original key.");
         }
     }
 }

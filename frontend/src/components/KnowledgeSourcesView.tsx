@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Tag, Loading, Empty } from 'tdesign-react';
 import { DeleteIcon, RefreshIcon, BrowseIcon } from 'tdesign-icons-react';
 import { api } from '../api';
+import { confirmDialog, notifyError, notifyInfo, notifySuccess } from '../notify';
 
 /** 知识来源批次管理 / Knowledge source batch management. */
 
@@ -18,7 +19,7 @@ export function KnowledgeSourcesView() {
   const load = useCallback(async () => {
     setLoading(true);
     try { setSources(await api.listSources()); }
-    catch (e) { alert('加载来源失败 / Failed: ' + (e as Error).message); }
+    catch (e) { notifyError('加载来源失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   }, []);
 
@@ -26,20 +27,20 @@ export function KnowledgeSourcesView() {
 
   /** 删除来源及其全部条目 / Delete a source and all its entries. */
   const remove = async (s: Source) => {
-    if (!window.confirm(`确定删除来源「${s.name}」及其 ${s.entryCount} 条知识吗？`)) return;
+    if (!(await confirmDialog('删除来源', `确定删除「${s.name}」及其 ${s.entryCount} 条知识吗？`))) return;
     setLoading(true);
     try {
       const r = await api.deleteSource(s.id);
-      alert(`已删除 / Deleted: ${r.deleted} 条`);
+      notifySuccess(`已删除 / Deleted: ${r.deleted} 条`);
       await load();
-    } catch (e) { alert('删除失败 / Failed: ' + (e as Error).message); }
+    } catch (e) { notifyError('删除失败 / Failed: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 
   /** 查看该来源的条目 / View entries for a source. */
   const viewEntries = (s: Source) => {
     // 通过检索页按来源过滤：跳转到检索并提示 / Use search with a source hint.
-    alert(`来源 ID / Source ID: ${s.id}\n可在「知识条目」中按标题检索该批次内容。`);
+    notifyInfo(`来源 ID / Source ID: ${s.id}\n可在「知识条目」中按标题检索该批次内容。`);
   };
 
   return (

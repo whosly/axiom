@@ -41,6 +41,15 @@ public class VectorService {
     private Collection collection;
     private boolean ready = false;
     private final Map<String, List<String>> trackedIds = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * Zvec native Collection 的调用串行锁 / Serializes all native Collection calls.
+     *
+     * <p>flush 与 query/upsert 并发可能读到写入中间态（刚写入却搜不到），
+     * native 库的线程安全性未知，因此所有调用在本服务内串行化。
+     * / Concurrent flush/query can observe intermediate states; the native thread-safety
+     * is unspecified, so all calls are serialized behind this single lock.
+     */
+    private final Object zvecLock = new Object();
 
     @PostConstruct
     public void init() {
@@ -53,12 +62,16 @@ public class VectorService {
 
             // Zvec.initialize() 已由 ZvecLifecycle 调用，此处不再重复 / Already initialized by ZvecLifecycle.
             CollectionSchema schema = new CollectionSchema(props.getZvec().getCollection());
-            FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
-                    props.getZvec().getDimension());
-            try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
-                vectorField.setIndexParams(hnsw);
+            // vectorField 也必须 close：FieldSchema 持有 native 资源，旁边的字段都用了
+            // try-with-resources，这里漏掉属于笔误级泄漏。/ vectorField holds native memory
+            // too; the surrounding fields all use try-with-resources, this one was a leak.
+            try (FieldSchema vectorField = new FieldSchema("embedding", DataType.VECTOR_FP32, false,
+                    props.getZvec().getDimension())) {
+                try (IndexParams hnsw = IndexParams.createHNSW(MetricType.COSINE, 32, 200)) {
+                    vectorField.setIndexParams(hnsw);
+                }
+                schema.addField(vectorField);
             }
-            schema.addField(vectorField);
 
             try (FieldSchema textField = new FieldSchema("text", DataType.STRING, true, 0)) {
                 schema.addField(textField);
@@ -118,9 +131,13 @@ public class VectorService {
 
             docs = new ArrayList<>();
             docs.add(doc);
-            collection.upsert(docs);
-            collection.flush();
-            trackedIds.computeIfAbsent(refId, k -> new ArrayList<>()).add(id);
+            synchronized (zvecLock) {
+                collection.upsert(docs);
+                collection.flush();
+            }
+            // 同步包装：同一 refId 的并发 upsert 会 add 到同一列表。
+            // Synchronized list: concurrent upserts append to the same per-refId list.
+            trackedIds.computeIfAbsent(refId, k -> java.util.Collections.synchronizedList(new ArrayList<>())).add(id);
         } catch (Exception e) {
             log.warn("[Zvec] upsert failed for {}: {}", id, e.getMessage());
         } finally {
@@ -128,7 +145,16 @@ public class VectorService {
         }
     }
 
-    /** Semantic search; returns the most relevant text snippets. */
+    /**
+     * 语义检索 / Semantic search with optional kind filter.
+     *
+     * <p>kind 过滤必须下推到向量查询（filter 表达式），否则 topK 先截断、再逐条丢弃
+     * 不匹配项，召回可能为 0，plan 阶段的 few-shot 字段映射随之失效。若 native 层
+     * 不支持 filter（异常路径），自动回退为"扩大候选 + 本地过滤"。
+     * / The kind filter is pushed down into the query; taking topK first and dropping
+     * mismatches afterwards can yield zero hits and break few-shot recall. Falls back
+     * to over-fetch + local filtering if the native filter is unsupported.
+     */
     public List<Hit> search(String query, String kindFilter, int topK) {
         if (!ready) return Collections.emptyList();
         try {
@@ -138,7 +164,47 @@ public class VectorService {
                 vq.setTopK(topK);
                 vq.setFieldName("embedding");
                 vq.setQueryVector(vector);
-                List<Doc> results = collection.query(vq);
+                if (kindFilter != null && !kindFilter.isBlank()) {
+                    // 与 KnowledgeVectorStore.buildFilter 同样的表达式 / Same expression form.
+                    vq.setFilter("kind = '" + kindFilter.replace("'", "''") + "'");
+                }
+                List<Doc> results;
+                synchronized (zvecLock) {
+                    results = collection.query(vq);
+                }
+                try {
+                    List<Hit> hits = new ArrayList<>();
+                    for (Doc d : results) {
+                        hits.add(new Hit(d.getPK(), d.getStringField("kind"),
+                                d.getStringField("refId"), d.getStringField("text"), d.getScore()));
+                    }
+                    return hits;
+                } finally {
+                    Doc.freeDocs(results);
+                }
+            }
+        } catch (Exception e) {
+            // native filter 不支持等异常 → 回退：扩大 3 倍候选后本地过滤 / Fall back to
+            // over-fetch + local filtering when the pushed-down filter is rejected.
+            log.debug("[Zvec] filtered search failed, retrying with local filter: {}", e.getMessage());
+            return searchWithLocalFilter(query, kindFilter, topK);
+        }
+    }
+
+    /** 本地过滤回退实现 / Local-filter fallback path. */
+    private List<Hit> searchWithLocalFilter(String query, String kindFilter, int topK) {
+        if (!ready) return Collections.emptyList();
+        try {
+            float[] vector = alignDimension(embeddingFactory.current().embed(query));
+            int fetch = kindFilter != null && !kindFilter.isBlank() ? Math.max(topK * 3, 15) : topK;
+            try (VectorQuery vq = new VectorQuery()) {
+                vq.setTopK(fetch);
+                vq.setFieldName("embedding");
+                vq.setQueryVector(vector);
+                List<Doc> results;
+                synchronized (zvecLock) {
+                    results = collection.query(vq);
+                }
                 try {
                     List<Hit> hits = new ArrayList<>();
                     for (Doc d : results) {
@@ -146,6 +212,7 @@ public class VectorService {
                         if (kindFilter != null && !kindFilter.isBlank() && !kindFilter.equals(kind)) continue;
                         hits.add(new Hit(d.getPK(), kind, d.getStringField("refId"),
                                 d.getStringField("text"), d.getScore()));
+                        if (hits.size() >= topK) break;
                     }
                     return hits;
                 } finally {
@@ -158,17 +225,25 @@ public class VectorService {
         }
     }
 
-    /** Convenience: remove all vectors associated with a dataset. */
+    /**
+     * 删除某数据集的全部向量 / Remove all vectors associated with a dataset.
+     *
+     * <p>改用 deleteByFilter 按 refId 过滤删除：不依赖内存 trackedIds（重启即丢失，
+     * 导致重启后的数据集向量永远无法清理）。/ Uses deleteByFilter instead of the in-memory
+     * trackedIds map, which is lost on restart and would leave vectors undeletable.
+     */
     public void deleteByRefId(String refId) {
         if (!ready) return;
+        String escaped = refId == null ? "" : refId.replace("'", "''");
         try {
-            List<String> toDelete = trackedIds.remove(refId);
-            if (toDelete != null && !toDelete.isEmpty()) {
-                collection.delete(toDelete);
+            synchronized (zvecLock) {
+                collection.deleteByFilter("refId = '" + escaped + "'");
                 collection.flush();
             }
         } catch (Exception e) {
             log.warn("[Zvec] delete failed for {}: {}", refId, e.getMessage());
+        } finally {
+            trackedIds.remove(refId);
         }
     }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Tag, Dialog, Loading, Select } from 'tdesign-react';
 import { RefreshIcon, BrowseIcon } from 'tdesign-icons-react';
 import { api } from '../api';
+import { notifyError } from '../notify';
 
 /**
  * Zvec 数据查看视图 / Zvec data inspection view.
@@ -49,7 +50,7 @@ export function ZvecInspectorView() {
 
   const openDoc = async (id: string) => {
     try { setDetail((await api.zvecDoc(active, id)).doc); }
-    catch (e) { alert('加载失败: ' + (e as Error).message); }
+    catch (e) { notifyError('加载失败: ' + (e as Error).message); }
   };
 
   return (

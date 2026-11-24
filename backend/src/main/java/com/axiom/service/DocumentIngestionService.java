@@ -111,16 +111,64 @@ public class DocumentIngestionService {
         for (String para : paragraphs) {
             String p = para.trim();
             if (p.isEmpty()) continue;
-            if (current.length() + p.length() > CHUNK_SIZE && current.length() > 0) {
-                addChunk(chunks, current.toString(), fileName, idx++);
-                // 重叠：保留上一块尾部 / Overlap: keep tail of previous chunk.
-                String tail = current.substring(Math.max(0, current.length() - OVERLAP));
-                current = new StringBuilder(tail);
+            // 单段落超上限时按句/字符二次切分，避免产生超出 embedding 有效长度的巨块。
+            // / Oversized paragraphs are split further so no chunk exceeds the embedding
+            // effective length.
+            if (p.length() > CHUNK_SIZE) {
+                for (String piece : splitOversized(p)) {
+                    appendPiece(chunks, piece, fileName, idx, current);
+                }
+                continue;
             }
-            current.append(p).append("\n");
+            appendPiece(chunks, p, fileName, idx, current);
         }
         if (current.length() > 0) addChunk(chunks, current.toString(), fileName, idx);
         return chunks;
+    }
+
+    /** 追加一个段落并按预算滚动出块 / Append a paragraph, rolling chunks by budget. */
+    private void appendPiece(List<DocumentChunkRequest> chunks, String p, String fileName,
+                             int idx, StringBuilder current) {
+        if (current.length() + p.length() > CHUNK_SIZE && current.length() > 0) {
+            addChunk(chunks, current.toString(), fileName, idx++);
+            // 重叠：保留上一块尾部 / Overlap: keep tail of previous chunk.
+            String tail = current.substring(Math.max(0, current.length() - OVERLAP));
+            current.setLength(0);
+            current.append(tail);
+        }
+        current.append(p).append("\n");
+    }
+
+    /** 超长段落按句边界粗切，再兜底硬切 / Split an oversized paragraph by sentence, then hard-cut. */
+    private List<String> splitOversized(String p) {
+        List<String> pieces = new ArrayList<>();
+        String[] sentences = p.split("(?<=[。！？!?\\.])\\s*");
+        StringBuilder current = new StringBuilder();
+        for (String s : sentences) {
+            if (s.isBlank()) continue;
+            if (s.length() > CHUNK_SIZE) {
+                // 单句仍超长：硬切 / A single sentence still oversized: hard-cut it.
+                for (int i = 0; i < s.length(); i += CHUNK_SIZE) {
+                    flushPiece(pieces, current);
+                    pieces.add(s.substring(i, Math.min(i + CHUNK_SIZE, s.length())));
+                }
+                continue;
+            }
+            if (current.length() + s.length() > CHUNK_SIZE) {
+                flushPiece(pieces, current);
+            }
+            current.append(s);
+        }
+        flushPiece(pieces, current);
+        return pieces;
+    }
+
+    /** 把缓冲内容冲入切片列表 / Flush the buffer into the piece list. */
+    private void flushPiece(List<String> pieces, StringBuilder current) {
+        if (current.length() > 0) {
+            pieces.add(current.toString().trim());
+            current.setLength(0);
+        }
     }
 
     /** 构造一个分块请求 / Build a chunk request. */

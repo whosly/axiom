@@ -64,4 +64,7 @@ logs/
 
 # === 浏览器测试临时文件 / Browser test artifacts ===
 .playwright-cli/
-*.yaml
+# Playwright 生成的报告配置；不再通配 *.yaml，避免误忽略未来加入的 CI/部署 yaml。
+# / Only Playwright's own generated yaml is ignored; a blanket *.yaml rule would
+# silently skip future CI/deployment manifests.
+.playwright/*.yaml

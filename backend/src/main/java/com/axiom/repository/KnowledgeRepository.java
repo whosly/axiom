@@ -237,16 +237,36 @@ public class KnowledgeRepository {
      * @param limit 返回条数 / Result limit.
      * @return 命中的条目 ID 与命中数 / Hit entry IDs with hit counts.
      */
-    public List<java.util.Map<String, Object>> searchByTerms(List<String> terms, int limit) {
+    /**
+     * 按倒排索引检索（可按数据集过滤）/ Search via inverted index (optionally scoped to a dataset).
+     *
+     * <p>必须与向量检索保持同一数据集边界：全局条目（dataset_id 为空）与当前数据集条目均可命中，
+     * 其他数据集的条目一律排除，防止跨业务域的口径串味。
+     * / Must mirror the vector-search dataset boundary: global entries and the current dataset's
+     * entries are eligible; entries from other datasets are excluded to avoid cross-domain mixing.
+     *
+     * @param terms     分词后的关键词 / Tokenized terms.
+     * @param datasetId 当前数据集 ID，可为 null（仅全局）/ Current dataset id, nullable (global only).
+     * @param limit     返回上限 / Result limit.
+     * @return entry_id + 命中数 / entry_id with hit counts.
+     */
+    public List<java.util.Map<String, Object>> searchByTerms(List<String> terms, String datasetId, int limit) {
         if (terms == null || terms.isEmpty()) return List.of();
         StringBuilder in = new StringBuilder();
         for (int i = 0; i < terms.size(); i++) {
             if (i > 0) in.append(",");
             in.append("?");
         }
-        String sql = "SELECT entry_id, COUNT(*) AS hits FROM knowledge_terms WHERE term IN (" + in
-                + ") GROUP BY entry_id ORDER BY hits DESC LIMIT " + Math.max(1, Math.min(limit, 100));
-        return jdbc.queryForList(sql, terms.toArray());
+        String sql = "SELECT t.entry_id, COUNT(*) AS hits FROM knowledge_terms t "
+                + "JOIN knowledge_entries e ON e.id = t.entry_id "
+                + "WHERE t.term IN (" + in + ") "
+                + "AND (e.deleted IS NULL OR e.deleted = FALSE) "
+                + "AND (e.dataset_id IS NULL OR e.dataset_id = ?) "
+                + "GROUP BY t.entry_id ORDER BY hits DESC LIMIT " + Math.max(1, Math.min(limit, 100));
+        Object[] args = new Object[terms.size() + 1];
+        for (int i = 0; i < terms.size(); i++) args[i] = terms.get(i);
+        args[terms.size()] = datasetId;
+        return jdbc.queryForList(sql, args);
     }
 
     // ---- helpers ----

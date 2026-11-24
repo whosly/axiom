@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Button, Tag, Loading, Select } from 'tdesign-react';
 import { RefreshIcon } from 'tdesign-icons-react';
 import { api } from '../api';
+import { notifyError } from '../notify';
 
 /**
  * 知识图谱视图 / Knowledge graph view.
@@ -37,7 +38,7 @@ export function KnowledgeGraphView() {
   const rebuild = async () => {
     setLoading(true);
     try { await api.rebuildGraph(); await load(); }
-    catch (e) { alert('重建失败: ' + (e as Error).message); }
+    catch (e) { notifyError('重建失败: ' + (e as Error).message); }
     finally { setLoading(false); }
   };
 

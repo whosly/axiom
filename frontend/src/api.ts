@@ -203,6 +203,11 @@ export const api = {
         if (event) onEvent(event);
       }
     }
+    // 流结束时必须无参 decode 冲出 TextDecoder 缓存的多字节残留：
+    // stream:true 模式下跨 chunk 截断的 UTF-8 尾字节会一直留在解码器里，
+    // 不 flush 则中文最后一个字符静默丢失。/ A no-arg decode() flushes the decoder's
+    // buffered tail bytes; without it a multi-byte char split across the final chunk is lost.
+    buffer += decoder.decode();
     // 流结束时缓冲区可能还有最后一个未以空行结尾的事件 / Flush trailing block without a final blank line.
     if (buffer.trim()) {
       const event = parseSSEBlock(buffer);

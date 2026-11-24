@@ -112,8 +112,12 @@ public class DataIngestionService {
     // ---- Excel ----
 
     private ParsedData parseExcel(byte[] bytes) throws IOException {
+        // WorkbookFactory 按文件魔数自动识别 HSSF(.xls) 与 XSSF(.xlsx)：
+        // 此前固定用 XSSFWorkbook 打开，老式 .xls 必然抛 InvalidFormatException。
+        // / WorkbookFactory detects HSSF(.xls) vs XSSF(.xlsx) by magic bytes; a hard-coded
+        // XSSFWorkbook always failed on legacy .xls files.
         try (org.apache.poi.ss.usermodel.Workbook wb =
-                     new org.apache.poi.xssf.usermodel.XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+                     org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
             org.apache.poi.ss.usermodel.Sheet sheet = wb.getSheetAt(0);
             if (sheet == null) throw new IOException("Excel 文件无工作表");
 

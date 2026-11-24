@@ -39,11 +39,16 @@ public class KnowledgeGraphService {
      * @return 构建统计 / Build statistics.
      */
     public Map<String, Object> rebuild() {
-        graphRepo.clear();
-        for (KnowledgeEntry e : knowledgeRepo.listAll()) {
-            buildEntryGraph(e);
+        // 全量重建与增量同步互斥：clear 进行中混入增量事件会被 clear 抹掉或产生半图。
+        // / Full rebuild is mutually exclusive with incremental sync: events landing inside
+        // a clear() would be erased or produce a half-built graph.
+        synchronized (graphLock) {
+            graphRepo.clear();
+            for (KnowledgeEntry e : knowledgeRepo.listAll()) {
+                buildEntryGraph(e);
+            }
+            graphRepo.bumpVersion();
         }
-        graphRepo.bumpVersion();
         Map<String, Object> stats = graphRepo.stats();
         log.info("[KnowledgeGraph] rebuilt: {}", stats);
         return stats;
@@ -97,6 +102,18 @@ public class KnowledgeGraphService {
      *
      * @param event 知识变更事件 / Knowledge-change event.
      */
+    /**
+     * 图谱写操作串行锁 / Serializes graph writes.
+     *
+     * <p>事件来自不同请求线程，并发增量同步会出现两类损坏：
+     * 1) delete→restore 乱序导致节点丢失；2) A 加节点未连边时 B 清理孤儿节点，
+     * 随后 A 连边产生悬空边。事件监听与 rebuild 都必须持锁串行执行。
+     * / Concurrent incremental syncs corrupt the graph: out-of-order delete/restore loses
+     * nodes, and orphan-pruning between a node insert and its edges creates dangling edges.
+     * Both event handling and rebuild must hold this lock.
+     */
+    private final Object graphLock = new Object();
+
     @EventListener
     public void onKnowledgeChanged(KnowledgeChangedEvent event) {
         var type = event.getChangeType();
@@ -110,16 +127,18 @@ public class KnowledgeGraphService {
         boolean isAdd = type == KnowledgeChangedEvent.ChangeType.ADD
                 || type == KnowledgeChangedEvent.ChangeType.BATCH;
 
-        for (String entryId : ids) {
-            // 先删旧子图保证幂等（ADD 覆盖更新、DELETE 纯删除）/ Remove old subgraph first for idempotency.
-            graphRepo.deleteEntrySubgraph(entryId);
-            if (isAdd) {
-                KnowledgeEntry entry = knowledgeRepo.findById(entryId);
-                if (entry != null) buildEntryGraph(entry);
+        synchronized (graphLock) {
+            for (String entryId : ids) {
+                // 先删旧子图保证幂等（ADD 覆盖更新、DELETE 纯删除）/ Remove old subgraph first for idempotency.
+                graphRepo.deleteEntrySubgraph(entryId);
+                if (isAdd) {
+                    KnowledgeEntry entry = knowledgeRepo.findById(entryId);
+                    if (entry != null) buildEntryGraph(entry);
+                }
             }
+            graphRepo.deleteOrphanNodes();
+            graphRepo.bumpVersion();
         }
-        graphRepo.deleteOrphanNodes();
-        graphRepo.bumpVersion();
         log.info("[KnowledgeGraph] incremental sync done: type={} affected={}", type, ids.size());
     }
 

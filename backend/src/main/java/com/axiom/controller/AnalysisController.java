@@ -32,7 +32,11 @@ public class AnalysisController {
     private final LlmProviderFactory llmFactory;
     private final LlmConfigService llmConfigService;
 
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    // 固定上限的线程池：每个任务含 DuckDB 查询 + LLM 流式 + embedding + Zvec flush，
+    // 无界 cachedThreadPool 在并发高峰会耗尽线程与 API 配额。
+    // / Bounded pool: each task spans DuckDB, streaming LLM, embedding and Zvec flush;
+    // an unbounded cached pool would exhaust threads and API quota under load.
+    private final ExecutorService executor = Executors.newFixedThreadPool(4);
 
     @GetMapping("/health")
     public Map<String, Object> health() {
@@ -108,20 +112,43 @@ public class AnalysisController {
         final String model = session.getModel();
         final String userId = userMsg.getId();
 
+        // 取消令牌：客户端断开/超时后置位，昂贵的后续阶段（LLM 结论、知识沉淀）全部跳过。
+        // / Cancellation flag: set on client disconnect or timeout so expensive downstream
+        // stages (LLM conclusion, knowledge memorize) are skipped entirely.
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
+
         executor.execute(() -> {
+            emitter.onError(e -> { cancelled.set(true); log.warn("[SSE] client disconnected: {}", e.getMessage()); });
+
             try {
                 send(emitter, "init", Map.of("sessionId", sid, "datasetId", datasetId,
                         "userMessageId", userId, "model", model));
 
                 send(emitter, "status", Map.of("stage", "planning", "message", "正在理解问题并生成分析计划..."));
                 AnalysisPlan plan = orchestrator.plan(ds, question);
+                if (cancelled.get()) { emitter.complete(); return; }
                 send(emitter, "plan", plan);
 
                 send(emitter, "status", Map.of("stage", "executing", "message", "正在执行分析计算..."));
                 AnalysisResult result = orchestrator.execute(ds, plan);
+                // 失败短路：execute 失败时 sql 为 null（AnalysisEngine 的错误对象）。
+                // 绝不能进入 conclude/memorize——空数据 + LLM 自由发挥 = 编造结论，
+                // 还会被沉淀为知识，污染后续检索。/ Short-circuit on failure: a null sql marks
+                // an engine error. Never conclude/memorize here — the LLM would fabricate a
+                // conclusion from empty data and pollute the knowledge base.
+                if (result.getSql() == null) {
+                    send(emitter, "result", result);
+                    send(emitter, "text", Map.of("content", result.getConclusion() == null
+                            ? "分析执行失败" : result.getConclusion()));
+                    send(emitter, "error", Map.of("message",
+                            result.getConclusion() == null ? "分析执行失败" : result.getConclusion()));
+                    emitter.complete();
+                    return;
+                }
                 send(emitter, "result", result);
                 if (result.getChart() != null) send(emitter, "chart", result.getChart());
 
+                if (cancelled.get()) { emitter.complete(); return; }
                 send(emitter, "status", Map.of("stage", "concluding", "message", "正在生成分析结论..."));
                 // 捕获每个流式 token 后再写回 result；orchestrator.conclude 内部也会 setConclusion，
                 // 但流式场景下 controller 必须用收集到的完整文本覆盖，否则会把结论清空。
@@ -135,6 +162,9 @@ public class AnalysisController {
                 });
                 if (conclusion.length() > 0) result.setConclusion(conclusion.toString());
 
+                // 取消检查：客户端已断开则不再沉淀知识/向量，避免"以为停止了但后台仍在写入"。
+                // / If the client is gone, skip memorize so nothing is written behind the scenes.
+                if (cancelled.get()) { emitter.complete(); return; }
                 orchestrator.memorize(ds, question, plan, result);
 
                 ChatMessage assistantMsg = new ChatMessage();
@@ -165,8 +195,7 @@ public class AnalysisController {
             }
         });
 
-        emitter.onTimeout(emitter::complete);
-        emitter.onError(e -> log.warn("[SSE] client disconnected: {}", e.getMessage()));
+        emitter.onTimeout(() -> { cancelled.set(true); emitter.complete(); });
         return emitter;
     }
 
