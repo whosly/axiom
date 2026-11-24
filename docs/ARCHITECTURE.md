@@ -50,9 +50,9 @@
 
 ### 2.1 为什么用 DDD
 
-改造前 `AnalysisPlan` 的字段都是裸字符串：`"trendd"` 拼错也能编译，`safeAgg()` 之类的字符串判断散落各处，领域知识（如「按月聚合 period 应显示 2026-01」）只能散在 SQL 拼接里——这正是 period 缺陷的根源。
+分析计划由 LLM 生成，是不可完全信任的外部输入：`"trendd"` 这类拼写错误、非法枚举值、编造的字段名，必须在类型层面拦截，而不是依赖散落各处的 `safeAgg()` 字符串判断。领域知识（如「按月聚合 period 应显示 2026-01」）也必须有明确归属，否则只能混在 SQL 拼接里——period 显示缺陷正是这样产生的。
 
-改造后领域概念用枚举值对象表达，行为内聚到枚举方法上：
+因此领域概念用枚举值对象表达，行为内聚到枚举方法上：
 
 ```
 com.axiom.domain/          领域层（无框架依赖）
@@ -157,11 +157,11 @@ pending --向量失败--> vector_failed --reindex--> pending --> ready
 
 ### 3.4 检索降级
 
-无 Embedding 时向量检索不可用。旧的 `keywordFallback` 用全表 `contains` 扫描，数据量大时慢。现在的方案是 `knowledge_terms` 倒排索引表：
+无 Embedding 时向量检索不可用，降级检索基于 `knowledge_terms` 倒排索引表（命中数即相关性分数，避免全表扫描）：
 
 - 入库时 `KnowledgeTokenizer` 分词：英文/数字按词，中文按 bigram（相邻两字），零外部依赖
 - 降级检索：`SELECT entry_id, COUNT(*) hits WHERE term IN (...) GROUP BY entry_id ORDER BY hits DESC`
-- 无命中时回退子串匹配，兼容旧数据
+- 无命中时回退子串匹配（覆盖倒排索引未覆盖的条目）
 
 bigram 与 Zvec 的 jieba FTS 不是重复建设：前者是纯 SQL 降级链路，后者只在 Zvec 可用时生效，构成主链路与降级链路的关系。
 
@@ -247,21 +247,19 @@ API（均为 GET）：`GET /api/knowledge/graph/reason/communities?maxIterations
 
 ### 4.6 推理性能设计
 
-旧实现每次推理都执行 `load()`：读取全部节点与边为 `List<Map<String,Object>>`，构造三份字符串键 Map，社区发现每次迭代对全节点排序 O(I × (V log V + E))，图变更后无失效机制。万级节点下内存与延迟不可控。
+图推理（社区发现/最短路径/关联分析）的目标是在万级节点图上把内存与延迟控制在可预测范围内，核心是四个机制：
 
-生产方案四层：
+**版本化快照**：`kg_meta(version)` 表记录图结构版本号，每次逻辑写后 `bumpVersion()` 一次（单条原子 SQL）。`GraphSnapshotCache` 按版本缓存紧凑快照——版本命中复用内存快照（零数据库读取），版本变化重建并原子替换（`AtomicReference` + 双检锁），重启自然重建。
 
-**版本化快照**：新增 `kg_meta(version)` 表，图结构每次逻辑写后 `bumpVersion()` 一次。`GraphSnapshotCache` 按版本缓存紧凑快照——版本命中复用内存快照（零数据库读取），版本变化重建并原子替换（`AtomicReference` + 双检锁），重启自然重建。
+**紧凑图结构**：`GraphSnapshot` 以 int 索引组织图数据，遍历全程无字符串哈希与装箱开销。
 
-**紧凑图结构**：`GraphSnapshot` 用 int 索引替代字符串键。
-
-| 旧结构 | 新结构 |
+| 组件 | 结构 |
 |---|---|
-| `Map<String,String> labels` | `String[] types` |
-| `Map<String,String> names` | `String[] labels` |
-| `Map<String,List<String>> adj` | `int[][] adjacency` + `Map<String,Integer> index` |
+| 节点类型 | `String[] types` |
+| 节点标签 | `String[] labels` |
+| 邻接关系 | `int[][] adjacency` + `Map<String,Integer> index` |
 
-内存降低约 5–10 倍，遍历无字符串哈希与装箱，`indexOf()` 提供 O(1) 查找。
+`indexOf()` 提供 O(1) 的节点 ID 查找。
 
 **大图采样**：节点数 > `app.graph.max-nodes`（默认 10000）时，按度数降序保留 Top `sample-size`（默认 3000）节点，只保留两端都在采样集内的边。返回附带 `sampled`、`totalNodes`、`analyzedNodes`，前端显示采样提示避免误导。
 
@@ -342,7 +340,7 @@ backend/data/
     └── knowledge_base_v2/    collection 2：知识条目（content 含 jieba FTS 索引）
 ```
 
-目录由 `DataSourceConfig.ensureParentDir()` 和 `ZvecLifecycle` 自动创建。Zvec 的 collection 目录本身必须不存在才能 `createAndOpen`（首次），存在时走 `open`（重启）。`knowledge_base_v2` 相比旧 `knowledge_base` 为 `content` 字段增加了 jieba FTS 索引，首次启动检测到新 collection 为空时自动全量 reindex。
+目录由 `DataSourceConfig.ensureParentDir()` 和 `ZvecLifecycle` 自动创建。Zvec 的 collection 目录本身必须不存在才能 `createAndOpen`（首次），存在时走 `open`（重启）。`knowledge_base_v2` 的 `content` 字段带 jieba FTS 索引（全文召回依赖它），首次启动检测到新 collection 为空时自动全量 reindex。
 
 | Collection | 路径 | 用途 |
 |---|---|---|
