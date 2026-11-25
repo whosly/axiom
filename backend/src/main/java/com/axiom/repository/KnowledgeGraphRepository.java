@@ -7,6 +7,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -136,6 +138,89 @@ public class KnowledgeGraphRepository {
         return jdbc.queryForList("SELECT id, type, label FROM kg_nodes ORDER BY type, id");
     }
 
+    /**
+     * 按主键批量取节点（IN 分批，防 SQLite 999 绑定上限）。
+     * Fetch nodes by primary key with chunked IN clauses.
+     *
+     * <p>返回顺序与 {@link #listNodes()} 一致（type, id 升序）：分批查询无法全局排序，
+     * 收集后在 Java 侧补齐，调用方无感知切换。/ Result order matches listNodes()
+     * (type, id ascending); chunked queries cannot sort globally, so rows are
+     * re-sorted in Java after collection.
+     *
+     * @param ids 节点 ID 集合 / Node ID set.
+     * @return 命中的节点行 / Matched node rows.
+     */
+    public List<Map<String, Object>> nodesByIds(Collection<String> ids) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        List<String> idList = new ArrayList<>(new LinkedHashSet<>(ids));
+        for (int from = 0; from < idList.size(); from += IN_CHUNK) {
+            List<String> chunk = idList.subList(from, Math.min(from + IN_CHUNK, idList.size()));
+            out.addAll(jdbc.queryForList(
+                    "SELECT id, type, label FROM kg_nodes WHERE id IN (" + placeholders(chunk.size()) + ")",
+                    chunk.toArray()));
+        }
+        out.sort(Comparator
+                .comparing((Map<String, Object> r) -> String.valueOf(value(r, "type")))
+                .thenComparing(r -> String.valueOf(value(r, "id"))));
+        return out;
+    }
+
+    /**
+     * 取子图内部边：两端都在给定 ID 集合内的边。
+     * Fetch edges whose both endpoints fall inside the given ID set.
+     *
+     * <p>实现取巧在正确性：用「source IN 分批」查询（命中 idx_kg_edge_source），
+     * target 在 Java 侧过滤。结果边的 source 必然在集合内，因此每个分批都能覆盖到，
+     * 跨分批不会漏边；若直接写「source IN AND target IN」双 IN，同一分批内无法
+     * 覆盖跨批的 (source, target) 组合，会漏边。/ The trick is correctness: query
+     * with chunked "source IN" (hits idx_kg_edge_source) and filter target in Java.
+     * Every result edge's source is guaranteed to be in the set, so no chunk can miss
+     * it; a dual "source IN AND target IN" would miss edges spanning two chunks.
+     *
+     * @param ids 子图节点 ID 集合 / Subgraph node ID set.
+     * @return 子图内部边 / Edges internal to the subgraph.
+     */
+    public List<Map<String, Object>> edgesWithinSubgraph(Collection<String> ids) {
+        Set<String> idSet = (ids instanceof Set<String> s) ? s : new LinkedHashSet<>(ids);
+        List<String> idList = new ArrayList<>(idSet);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (int from = 0; from < idList.size(); from += IN_CHUNK) {
+            List<String> chunk = idList.subList(from, Math.min(from + IN_CHUNK, idList.size()));
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT source, target, relation FROM kg_edges WHERE source IN (" + placeholders(chunk.size()) + ")",
+                    chunk.toArray());
+            for (Map<String, Object> row : rows) {
+                if (idSet.contains(String.valueOf(value(row, "source")))
+                        && idSet.contains(String.valueOf(value(row, "target")))) {
+                    out.add(row);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** IN 占位符串 / Comma-separated IN placeholders. */
+    private static String placeholders(int n) {
+        return String.join(",", java.util.Collections.nCopies(n, "?"));
+    }
+
+    /**
+     * 大小写不敏感读取行值 / Case-insensitive row value lookup.
+     *
+     * <p>JdbcTemplate.queryForList 在 H2 下返回大写列名，SQLite 下返回小写列名；
+     * 统一用此方法读取，保证两种元数据模式下行为一致。
+     * / JdbcTemplate returns uppercase column keys on H2 and lowercase on SQLite;
+     * this helper normalizes access across both metadata modes.
+     */
+    private static Object value(Map<String, Object> row, String key) {
+        Object v = row.get(key);
+        if (v != null) return v;
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(key)) return e.getValue();
+        }
+        return null;
+    }
+
     /** 列出所有边 / List all edges. */
     public List<Map<String, Object>> listEdges() {
         return jdbc.queryForList("SELECT source, target, relation FROM kg_edges");
@@ -165,13 +250,12 @@ public class KnowledgeGraphRepository {
             Set<String> next = new LinkedHashSet<>();
             for (int from = 0; from < frontier.size(); from += IN_CHUNK) {
                 List<String> chunk = frontier.subList(from, Math.min(from + IN_CHUNK, frontier.size()));
-                String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
                 Object[] args = new Object[chunk.size() * 2];
                 System.arraycopy(chunk.toArray(), 0, args, 0, chunk.size());
                 System.arraycopy(chunk.toArray(), 0, args, chunk.size(), chunk.size());
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT source, target FROM kg_edges WHERE source IN (" + placeholders + ")"
-                                + " OR target IN (" + placeholders + ")", args);
+                        "SELECT source, target FROM kg_edges WHERE source IN (" + placeholders(chunk.size()) + ")"
+                                + " OR target IN (" + placeholders(chunk.size()) + ")", args);
                 for (Map<String, Object> row : rows) {
                     String src = String.valueOf(row.get("source"));
                     String tgt = String.valueOf(row.get("target"));

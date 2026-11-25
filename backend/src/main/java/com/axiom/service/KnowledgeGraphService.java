@@ -185,37 +185,12 @@ public class KnowledgeGraphService {
         // Clamp before both use and response so the reported hops matches the actual traversal.
         int effectiveHops = Math.max(1, Math.min(hops, 5));
         Set<String> ids = graphRepo.neighbors(nodeId, effectiveHops);
-        List<Map<String, Object>> allNodes = graphRepo.listNodes();
-        List<Map<String, Object>> subNodes = new ArrayList<>();
-        for (Map<String, Object> n : allNodes) {
-            // 大小写兼容：H2 返回大写键（ID），SQLite 返回小写键（id）
-            // Case-insensitive: H2 returns uppercase keys (ID), SQLite returns lowercase (id).
-            if (ids.contains(String.valueOf(mapValue(n, "id")))) subNodes.add(n);
-        }
-        List<Map<String, Object>> subEdges = new ArrayList<>();
-        for (Map<String, Object> e : graphRepo.listEdges()) {
-            String source = String.valueOf(mapValue(e, "source"));
-            String target = String.valueOf(mapValue(e, "target"));
-            if (ids.contains(source) && ids.contains(target)) subEdges.add(e);
-        }
+        // 子图过滤下推 SQL：按 ID 集合分批取节点与内部边，不再全表拉取后内存过滤
+        // （图大时代价从 O(全图) 降到 O(子图)）。/ Push subgraph filtering down to SQL:
+        // fetch nodes and internal edges by ID set instead of loading the whole graph.
+        List<Map<String, Object>> subNodes = graphRepo.nodesByIds(ids);
+        List<Map<String, Object>> subEdges = graphRepo.edgesWithinSubgraph(ids);
         return Map.of("center", nodeId, "hops", effectiveHops, "nodes", subNodes, "edges", subEdges);
-    }
-
-    /**
-     * 不区分大小写读取 Map 值 / Case-insensitive map lookup.
-     *
-     * <p>JdbcTemplate.queryForList 在 H2 下返回大写列名，SQLite 下返回小写列名；
-     * 统一用此方法读取，保证两种元数据模式下邻居查询行为一致。
-     * / JdbcTemplate returns uppercase column keys on H2 and lowercase on SQLite;
-     * this helper normalizes access so neighbor queries behave identically in both modes.
-     */
-    private Object mapValue(Map<String, Object> row, String key) {
-        Object v = row.get(key);
-        if (v != null) return v;
-        for (Map.Entry<String, Object> e : row.entrySet()) {
-            if (e.getKey().equalsIgnoreCase(key)) return e.getValue();
-        }
-        return null;
     }
 
 }
