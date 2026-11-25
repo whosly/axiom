@@ -126,6 +126,23 @@ public final class FormulaCompiler {
             depth--;
         }
 
+        /**
+         * 一元符号链同样计入深度：此前只有括号计数，「- - - … x」走 parseFactor
+         * 无限递归，数万个连续负号即可打爆栈（StackOverflowError 逃过 catch(Exception)）。
+         * / Unary sign chains count toward the same cap — previously only parens were
+         * counted, so a long "- - - … x" chain recursed unbounded and overflowed the stack.
+         */
+        void enterUnary() {
+            if (++depth > MAX_PARSE_DEPTH) {
+                throw fail(expr, -1, "公式嵌套过深（上限 " + MAX_PARSE_DEPTH + " 层）"
+                        + " / expression nesting too deep (max " + MAX_PARSE_DEPTH + ")");
+            }
+        }
+
+        void exitUnary() {
+            depth--;
+        }
+
         boolean hasNext() {
             return !tokens.isEmpty();
         }
@@ -172,11 +189,11 @@ public final class FormulaCompiler {
             st.exitParen();
             return inner;
         }
-        if (t.isOp('-')) {
-            return new Op('-', new Num(0), parseFactor(st));
-        }
-        if (t.isOp('+')) {
-            return parseFactor(st);
+        if (t.isOp('-') || t.isOp('+')) {
+            st.enterUnary();
+            Node inner = t.isOp('-') ? new Op('-', new Num(0), parseFactor(st)) : parseFactor(st);
+            st.exitUnary();
+            return inner;
         }
         if (t.number() != null) return new Num(t.number());
         // 运算符/右括号在此处属于语法错误，不能兜底当字段引用——否则「销售额 * * 成本」

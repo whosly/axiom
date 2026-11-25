@@ -118,7 +118,9 @@ public class AnalysisEngine {
         if (timeCol == null) throw new IllegalArgumentException("数据集中没有时间列，无法做趋势分析");
 
         TimeGranularity granularity = plan.getTimeGranularity();
-        List<String> metrics = plan.hasMetrics() ? plan.getMetrics() : List.of(firstNumeric(dataset));
+        List<String> metrics = plan.hasMetrics()
+                ? resolveMetrics(dataset, plan.getMetrics(), formulas)
+                : List.of(firstNumeric(dataset));
         if (metrics.isEmpty() || metrics.get(0) == null) throw new IllegalArgumentException("数据集中没有数值列，无法做趋势分析");
 
         // 关键修复 1：用 granularity.periodSql 生成格式化后的 period（如 2026-01）。
@@ -163,7 +165,11 @@ public class AnalysisEngine {
     // ---- 异常识别 / anomaly ----
 
     private AnalysisResult anomaly(Dataset dataset, AnalysisPlan plan, String table, Map<String, String> formulas) {
-        String metric = plan.hasMetrics() ? plan.getMetrics().get(0) : firstNumeric(dataset);
+        // 与 query/compare 一致：文本列指标提前显式报错，公式指标放行。
+        // / Same as query/compare: reject non-numeric metrics early, pass formulas through.
+        String metric = plan.hasMetrics()
+                ? resolveMetrics(dataset, plan.getMetrics(), formulas).get(0)
+                : firstNumeric(dataset);
         if (metric == null) throw new IllegalArgumentException("数据集中没有数值列，无法做异常识别");
 
         String groupCol = plan.hasDimension() ? plan.getDimension() : null;
@@ -252,7 +258,6 @@ public class AnalysisEngine {
         if (hasDim) {
             // 多序列：按维度聚合首尾 / Multi-series: per-dimension endpoints.
             Map<String, double[]> series = new LinkedHashMap<>(); // [first, last]
-            Map<String, Double> max = new LinkedHashMap<>();
             for (Map<String, Object> r : rows) {
                 Object v = r.get(metric);
                 if (!(v instanceof Number n)) continue;
@@ -260,7 +265,6 @@ public class AnalysisEngine {
                 double d = n.doubleValue();
                 double[] fl = series.computeIfAbsent(dim, k -> new double[]{d, d});
                 fl[1] = d;
-                max.merge(dim, d, Math::max);
             }
             for (Map.Entry<String, double[]> e : series.entrySet()) {
                 double a = e.getValue()[0], b = e.getValue()[1];

@@ -59,9 +59,12 @@ public class LocalEmbeddingProvider implements EmbeddingProvider {
                 tokenizer.load(vocabPath.toString());
 
                 env = OrtEnvironment.getEnvironment();
-                OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-                opts.setIntraOpNumThreads(cfg.getThreads());
-                session = env.createSession(modelPath.toString(), opts);
+                // SessionOptions 持 native 内存，传给 createSession 后即弃，必须释放。
+                // / SessionOptions holds native memory; release it once the session is built.
+                try (OrtSession.SessionOptions opts = new OrtSession.SessionOptions()) {
+                    opts.setIntraOpNumThreads(cfg.getThreads());
+                    session = env.createSession(modelPath.toString(), opts);
+                }
                 ready = true;
                 log.info("[LocalEmbedding] model loaded: {} (dim={}, threads={})",
                         modelPath.toAbsolutePath(), dimension(), cfg.getThreads());

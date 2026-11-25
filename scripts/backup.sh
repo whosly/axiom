@@ -8,8 +8,10 @@
 #   ./scripts/backup.sh restore <备份文件>       # 从备份恢复（需停止服务）
 #   ./scripts/backup.sh prune [保留数量]         # 清理旧备份（默认保留 5 份）
 #
-# 备份内容：H2/DuckDB/SQLite 元数据与分析库、Zvec 双 collection 向量、本地模型。
-# Backup scope: H2/DuckDB/SQLite databases, Zvec collections and local models.
+# 备份内容：H2/DuckDB/SQLite 元数据与分析库、Zvec 双 collection 向量。
+# 本地 embedding 模型随镜像分发（/app/models，不在数据卷内），恢复备份后无需额外操作。
+# Backup scope: H2/DuckDB/SQLite databases and Zvec collections. The local embedding
+# model ships with the image (/app/models, outside the data volume) — no extra step after restore.
 
 set -euo pipefail
 

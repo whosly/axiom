@@ -66,9 +66,20 @@ public class ZvecController {
      */
     @GetMapping("/collections/{name}/docs/{id}")
     public Map<String, Object> doc(@PathVariable String name, @PathVariable String id) {
+        // 先区分「collection 不可用/未知」与「文档不存在」两种 null 来源，
+        // 否则排查方向会被误导。/ Disambiguate "collection unavailable" from
+        // "document not found" — both map to null downstream.
+        if (!collectionAvailable(name)) return Map.of("error", "collection 不可用");
         Object doc = withCollection(name, coll -> inspector.docDetail(coll, id));
         if (doc == null) return Map.of("error", "文档不存在");
         return Map.of("doc", doc);
+    }
+
+    /** collection 是否已知且就绪 / Whether the named collection is known and ready. */
+    private boolean collectionAvailable(String name) {
+        if (props.getZvec().getCollection().equals(name)) return vectorService.isReady();
+        if (props.getZvec().getKnowledgeCollection().equals(name)) return knowledgeStore.isReady();
+        return false;
     }
 
     /**

@@ -111,6 +111,10 @@ function App() {
     // 用户随后发送的消息会写进旧会话。/ Aborting on switch is mandatory — otherwise the
     // old stream's init event flips currentSessionId back and new messages leak into it.
     abortRef.current?.abort();
+    // 同步递增 chat token：让被中止旧流的 finally 彻底让出清理权，
+    // 否则它会在会话加载期间提前复位 isLoading / null 掉 abortRef。
+    // / Bump the chat token so the aborted stream fully yields cleanup.
+    chatTokenRef.current++;
     const token = ++openSessionTokenRef.current;
     setIsLoading(true);
     try {
@@ -129,6 +133,12 @@ function App() {
     abortRef.current?.abort();
     chatTokenRef.current++;
     openSessionTokenRef.current++;
+    // 被中止的旧流会因 token 失配跳过 finally 里的 isLoading 复位（控制权已让出），
+    // 这里必须自己复位，否则生成中点「新对话」输入框永久禁用。
+    // / The aborted stream skips its finally cleanup (ownership was handed over),
+    // so reset here or the input stays permanently disabled.
+    setIsLoading(false);
+    abortRef.current = null;
     setCurrentSessionId(null);
     setMessages([]);
   };

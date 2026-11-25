@@ -146,13 +146,22 @@ public class AnalysisOrchestrator {
         Set<String> names = dataset.getColumns().stream().map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
         Set<String> numericNames = dataset.getColumns().stream()
                 .filter(c -> "numeric".equals(c.getType())).map(ColumnInfo::getName).collect(java.util.stream.Collectors.toSet());
+        // 公式指标（知识库注册的派生字段）不是物理列，必须放行——否则引擎侧的
+        // aggregate-then-compute 编译在 chat 主链路永远不可达。引用列是否存在于
+        // 本数据集由 FormulaCompiler 在执行期按本数据集列白名单确定性校验。
+        // / Formula metrics are derived fields, not physical columns; they must pass
+        // through or the engine's compile path is unreachable from chat. FormulaCompiler
+        // validates referenced columns against this dataset's whitelist at execution.
+        Set<String> formulas = knowledgeService.formulaIndex().keySet();
 
-        // 过滤幻觉指标；COUNT 可以作用于任意列，其余聚合要求 numeric。
-        // Drop hallucinated metrics; COUNT may target any column, other aggregates need numeric.
+        // 过滤幻觉指标；COUNT 可以作用于任意列，其余聚合要求 numeric；公式指标直接放行。
+        // Drop hallucinated metrics; COUNT may target any column, other aggregates need
+        // numeric, formula metrics pass through for deterministic compilation.
         List<String> metrics = plan.getMetrics() == null ? List.of() : plan.getMetrics().stream()
-                .filter(m -> m != null && names.contains(m))
+                .filter(m -> m != null && (names.contains(m) || formulas.contains(m)))
                 .filter(m -> "count".equalsIgnoreCase(plan.getAggregation() == null ? "" : plan.getAggregation().getValue())
-                        || numericNames.contains(m))
+                        || numericNames.contains(m)
+                        || formulas.contains(m))
                 .distinct().toList();
         plan.setMetrics(metrics);
 

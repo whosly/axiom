@@ -36,24 +36,28 @@ export function KnowledgeGraphView() {
   // 加载失败提示条：失败不能吞成"暂无数据"空态，误导用户去点重建
   // / Load-failure banner: failures must surface, not masquerade as an empty graph.
   const [loadError, setLoadError] = useState<string>('');
-  // 请求序号 + 卸载守卫：组件卸载后 in-flight 响应不再回写 state
-  // / Request sequence + unmount guard: in-flight responses never write back after unmount.
+  // 请求序号 + 卸载守卫：过期响应（被更新的请求超越）与卸载后的 in-flight 响应
+  // 都不回写 state——只判卸载会让慢的旧响应覆盖新数据。
+  // / Request sequence + unmount guard: stale responses (superseded by newer ones)
+  // and post-unmount responses never write back.
   const loadSeq = useRef(0);
   const alive = () => loadSeq.current >= 0;
 
   const load = async () => {
-    loadSeq.current++;
+    const seq = ++loadSeq.current;
     setLoading(true);
     setLoadError('');
     try {
       const g = await api.getGraph();
-      if (!alive()) return;
+      if (!alive() || seq !== loadSeq.current) return;
       setGraph({ nodes: g.nodes || [], edges: g.edges || [] });
     } catch (e) {
-      if (!alive()) return;
+      if (!alive() || seq !== loadSeq.current) return;
       setLoadError('图谱加载失败: ' + (e as Error).message);
     } finally {
-      if (alive()) setLoading(false);
+      // 只有仍是最新请求才关闭 loading；被超越的旧请求不得提前收尾。
+      // / Only the latest request may clear loading.
+      if (alive() && seq === loadSeq.current) setLoading(false);
     }
   };
 
@@ -73,18 +77,18 @@ export function KnowledgeGraphView() {
 
   const focusNeighbors = async (id: string) => {
     if (!id) { load(); return; }
-    loadSeq.current++;
+    const seq = ++loadSeq.current;
     setLoading(true);
     setLoadError('');
     try {
       const r = await api.graphNeighbors(id, 2);
-      if (!alive()) return;
+      if (!alive() || seq !== loadSeq.current) return;
       setGraph({ nodes: r.nodes || [], edges: r.edges || [] });
     } catch (e) {
-      if (!alive()) return;
+      if (!alive() || seq !== loadSeq.current) return;
       setLoadError('邻居查询失败: ' + (e as Error).message);
     } finally {
-      if (alive()) setLoading(false);
+      if (alive() && seq === loadSeq.current) setLoading(false);
     }
   };
 

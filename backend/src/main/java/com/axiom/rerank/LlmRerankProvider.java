@@ -34,8 +34,7 @@ public class LlmRerankProvider implements RerankProvider {
 
     @Override
     public List<Double> score(String query, List<String> candidates) {
-        List<Double> fallback = new ArrayList<>(java.util.Collections.nCopies(candidates.size(), 0.0));
-        if (candidates.isEmpty()) return fallback;
+        if (candidates.isEmpty()) return List.of();
         try {
             StringBuilder prompt = new StringBuilder();
             prompt.append("请判断每个候选与问题的相关性，输出 JSON 数组（0~1 的小数），不要其他文字。\n");
@@ -63,8 +62,13 @@ public class LlmRerankProvider implements RerankProvider {
                 return scores;
             }
         } catch (Exception e) {
-            log.warn("[LlmRerank] failed, fallback to zeros: {}", e.getMessage());
+            // 失败返回 null（= 重排不可用），由 RerankService 保留召回原始分数。
+            // 全 0 分占位会让 retrieveContext 的 0.05 阈值把命中全部滤空——
+            // LLM 限流/抖动时知识注入静默消失，比不用 rerank 更糟。
+            // / Return null on failure; zero-filling silently wipes all knowledge
+            // hits at the downstream 0.05 threshold — worse than no rerank at all.
+            log.warn("[LlmRerank] failed, keep recall scores: {}", e.getMessage());
         }
-        return fallback;
+        return null;
     }
 }

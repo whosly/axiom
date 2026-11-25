@@ -24,7 +24,11 @@ export function GraphReasoningView() {
 
   /** 加载图谱节点供下拉选择 / Load graph nodes for dropdowns. */
   useEffect(() => {
+    // 卸载守卫：组件关闭后不回写 state、不在已关闭视图上弹错误 toast。
+    // / Unmount guard: no state writeback or error toast after the view is closed.
+    let mounted = true;
     api.getGraph().then(g => {
+      if (!mounted) return;
       setNodeOptions((g.nodes || []).map(n => ({
         label: nodeLabel(n),
         value: nodeId(n),
@@ -32,10 +36,9 @@ export function GraphReasoningView() {
       const kinds = (g.nodes || []).filter(n => nodeType(n) === 'knowledge');
       if (kinds.length && !entryId) setEntryId(nodeId(kinds[0]));
     }).catch(e => {
-      // 下拉为空的原因必须可见，否则用户以为没有图谱数据
-      // / Surface why the dropdown is empty instead of silently showing no options.
-      notifyError('图谱加载失败 / Failed to load graph: ' + (e as Error).message);
+      if (mounted) notifyError('图谱加载失败 / Failed to load graph: ' + (e as Error).message);
     });
+    return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 请求序号守卫：社区发现/路径/关联分析共享 loading，快速切换 tab 或连点时

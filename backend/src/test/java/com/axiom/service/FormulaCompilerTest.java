@@ -188,4 +188,20 @@ class FormulaCompilerTest {
         String sql = FormulaCompiler.compile("销售额 * 100000000000000000000", NO_REFS::get, ANY, "SUM");
         assertThat(sql).contains("1.0E20");
     }
+
+    /**
+     * 一元符号链计入深度上限：此前只有括号计数，超长 "- - - …" 链无限递归
+     * 打爆栈。/ Unary chains share the depth cap — previously unbounded recursion.
+     */
+    @Test
+    @DisplayName("一元符号链超限显式报错而非栈溢出")
+    void unaryChainCap() {
+        String longChain = "- ".repeat(200) + "销售额";
+        assertThatThrownBy(() -> FormulaCompiler.compile(longChain, NO_REFS::get, ANY, "SUM"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("嵌套过深");
+        // 短链正常编译 / short chains still compile.
+        assertThat(FormulaCompiler.compile("- - 销售额", NO_REFS::get, ANY, "SUM"))
+                .contains("销售额");
+    }
 }

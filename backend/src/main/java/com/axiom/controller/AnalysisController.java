@@ -170,7 +170,10 @@ public class AnalysisController {
 
         final String sid = sessionId;
         final Dataset ds = dataset;
-        final String model = session.getModel();
+        // 记录实际执行所用模型而非会话创建时的快照：切换 provider/模型后旧会话
+        // 的历史消息会记错模型名。/ Record the model actually used, not the
+        // session-creation snapshot that goes stale after a provider switch.
+        final String model = llmFactory.isAvailable() ? llmFactory.current().chatModel() : session.getModel();
         final String userId = userMsg.getId();
 
         // 取消令牌：客户端断开/超时后置位，昂贵的后续阶段（LLM 结论、知识沉淀）全部跳过。
@@ -209,8 +212,9 @@ public class AnalysisController {
                 // conclusion from empty data and pollute the knowledge base.
                 if (result.getSql() == null) {
                     send(emitter, "result", result, cancelled);
-                    send(emitter, "text", Map.of("content", result.getConclusion() == null
-                            ? "分析执行失败" : result.getConclusion()), cancelled);
+                    // 只发 error 事件：再发 text 会让前端渲染出「分析失败：分析执行失败：…」双前缀
+                    // （error 分支整体覆盖助手消息并自带前缀）。/ Send error only — a duplicate
+                    // text event yields a doubled prefix after the frontend's overwrite.
                     send(emitter, "error", Map.of("message",
                             result.getConclusion() == null ? "分析执行失败" : result.getConclusion()), cancelled);
                     emitter.complete();

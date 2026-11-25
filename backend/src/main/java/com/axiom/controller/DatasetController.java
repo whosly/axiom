@@ -145,7 +145,15 @@ public class DatasetController {
                 parsed.headers().size(), table, parsed.columns(), now, now);
 
         datasetRepo.createTable(table, parsed);
-        metaRepo.saveDataset(d, mapper.writeValueAsString(parsed.columns()));
+        try {
+            metaRepo.saveDataset(d, mapper.writeValueAsString(parsed.columns()));
+        } catch (Exception e) {
+            // 跨库双写无分布式事务：元数据落库失败必须补偿删掉刚建的 DuckDB 表，
+            // 否则孤儿表永久泄漏且无回收入口。/ No cross-DB transaction: a metadata
+            // failure must drop the just-created DuckDB table or it leaks forever.
+            datasetRepo.dropTable(table);
+            throw e;
+        }
         orchestrator.indexDataset(d);
 
         log.info("[Dataset] registered {} ({} rows, {} cols)", id, d.getRowCount(), d.getColumnCount());

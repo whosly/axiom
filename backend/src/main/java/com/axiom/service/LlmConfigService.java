@@ -85,16 +85,19 @@ public class LlmConfigService {
         // / apiKey follows the other fields: blank means "unchanged". A blank submit
         // from the config panel must not silently wipe the existing key and degrade
         // the whole pipeline; explicit removal goes through the config file.
-        if (body.containsKey("apiKey") && !body.get("apiKey").isBlank()) cfg.setApiKey(body.get("apiKey"));
-        if (body.containsKey("baseUrl") && !body.get("baseUrl").isBlank()) cfg.setBaseUrl(body.get("baseUrl"));
-        if (body.containsKey("chatModel") && !body.get("chatModel").isBlank()) cfg.setChatModel(body.get("chatModel"));
-        if (body.containsKey("reasonerModel") && !body.get("reasonerModel").isBlank())
-            cfg.setReasonerModel(body.get("reasonerModel"));
-        if (body.containsKey("temperature")) {
+        // JSON null 值（如 {"apiKey": null}）不能进 hasText/isBlank 判断——会 NPE 变 500。
+        // / JSON null values must be treated as absent, or isBlank() throws NPE → 500.
+        java.util.function.Predicate<String> hasText =
+                k -> body.get(k) != null && !body.get(k).isBlank();
+        if (hasText.test("apiKey")) cfg.setApiKey(body.get("apiKey"));
+        if (hasText.test("baseUrl")) cfg.setBaseUrl(body.get("baseUrl"));
+        if (hasText.test("chatModel")) cfg.setChatModel(body.get("chatModel"));
+        if (hasText.test("reasonerModel")) cfg.setReasonerModel(body.get("reasonerModel"));
+        if (body.containsKey("temperature") && body.get("temperature") != null) {
             try { cfg.setTemperature(Double.parseDouble(body.get("temperature"))); }
             catch (NumberFormatException ignored) { /* 保留原值 / keep previous value */ }
         }
-        if (body.containsKey("maxTokens")) {
+        if (body.containsKey("maxTokens") && body.get("maxTokens") != null) {
             try { cfg.setMaxTokens(Integer.parseInt(body.get("maxTokens"))); }
             catch (NumberFormatException ignored) { /* 保留原值 / keep previous value */ }
         }

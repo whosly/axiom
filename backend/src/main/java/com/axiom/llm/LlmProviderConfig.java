@@ -42,7 +42,10 @@ public class LlmProviderConfig {
         if (other.apiKey != null && !other.apiKey.isBlank()) this.apiKey = other.apiKey;
         if (other.chatModel != null && !other.chatModel.isBlank()) this.chatModel = other.chatModel;
         if (other.reasonerModel != null && !other.reasonerModel.isBlank()) this.reasonerModel = other.reasonerModel;
-        if (other.temperature != 0) this.temperature = other.temperature;
+        // temperature=0（完全确定性输出）是合法值，不能当「未设置」丢弃——应用持久化的
+        // 配置总是显式序列化该字段；负数视为无效未设置。/ 0 is a legal temperature (fully
+        // deterministic); app-persisted configs always serialize it explicitly, negatives are unset.
+        if (other.temperature >= 0) this.temperature = other.temperature;
         if (other.maxTokens != 0) this.maxTokens = other.maxTokens;
     }
 }

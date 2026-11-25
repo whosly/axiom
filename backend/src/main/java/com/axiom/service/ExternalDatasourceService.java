@@ -100,6 +100,30 @@ public class ExternalDatasourceService {
     }
 
     /**
+     * 顶层分号检测（跳过字符串字面量与转义）：字面量内的分号不是语句分隔符，
+     * 简单的 contains(";") 会误伤 WHERE name = 'a;b' 这类合法查询。
+     * / Detect a statement-terminating semicolon outside string literals; a plain
+     * contains(";") wrongly rejects queries like WHERE name = 'a;b'.
+     */
+    private boolean hasTopLevelSemicolon(String sql) {
+        boolean inString = false;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (inString) {
+                if (c == '\\' && i + 1 < sql.length()) i++; // 反斜杠转义 / backslash escape.
+                else if (c == '\'') {
+                    if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') i++; // '' 双写转义.
+                    else inString = false;
+                }
+                continue;
+            }
+            if (c == '\'') inString = true;
+            else if (c == ';') return true;
+        }
+        return false;
+    }
+
+    /**
      * JDBC URL 危险驱动参数：本地文件读取（allowLoadLocalInfile）、反序列化 gadget
      * （autoDeserialize）、自定义拦截器/Socket 工厂等已知攻击向量。
      * / Dangerous JDBC driver params: local-file reads, deserialization gadgets,
@@ -188,12 +212,17 @@ public class ExternalDatasourceService {
         // 不剥离则 INTO/**/OUTFILE 可穿透全部正则防线。
         // / Validate the comment-stripped SQL: block comments lex as whitespace in MySQL,
         // so without stripping INTO/**/OUTFILE sails through every regex guard.
-        String upper = stripSqlComments(safeSql).trim().toUpperCase();
+        String stripped = stripSqlComments(safeSql).trim();
+        String upper = stripped.toUpperCase();
         // 只读校验：拒绝非 SELECT/WITH/SHOW，拒绝分号后跟写操作 / Read-only guard.
         if (!(upper.startsWith("SELECT") || upper.startsWith("WITH") || upper.startsWith("SHOW"))) {
             throw new IllegalArgumentException("仅允许只读查询（SELECT/WITH/SHOW）/ Only read-only queries allowed");
         }
-        if (upper.contains(";")) throw new IllegalArgumentException("不允许多条语句 / Multiple statements not allowed");
+        // 多语句检测跳过字符串字面量：WHERE name = 'a;b' 是合法单语句。
+        // / Multi-statement check skips literals: WHERE name = 'a;b' is a single statement.
+        if (hasTopLevelSemicolon(stripped)) {
+            throw new IllegalArgumentException("不允许多条语句 / Multiple statements not allowed");
+        }
         // WITH 可构造 data-modifying CTE（WITH x AS (DELETE ... RETURNING ...)），前缀校验会漏过。
         // 对 WITH 语句额外扫描顶层关键字，命中写操作直接拒绝。
         // A data-modifying CTE can start with WITH and still write; scan for write keywords.
@@ -276,7 +305,14 @@ public class ExternalDatasourceService {
                 table, parsed.columns(), now, now);
 
         datasetRepo.createTable(table, parsed);
-        metaRepo.saveDataset(dataset, mapper.writeValueAsString(parsed.columns()));
+        try {
+            metaRepo.saveDataset(dataset, mapper.writeValueAsString(parsed.columns()));
+        } catch (Exception e) {
+            // 与 DatasetController.registerDataset 相同的补偿：元数据失败删表防孤儿泄漏。
+            // / Same compensation as registerDataset: drop the table when metadata fails.
+            datasetRepo.dropTable(table);
+            throw e;
+        }
         orchestrator.indexDataset(dataset);
 
         log.info("[ExternalDS] imported {} rows into dataset {}", rows.size(), dataset.getId());
@@ -329,6 +365,11 @@ public class ExternalDatasourceService {
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("JDBC driver not found: " + driver, e);
         }
+        // 建连登录超时：不可达主机在 TCP 层可能挂到 OS 级超时（分钟级），把请求线程
+        // 拖死在 meta 池外。连接建立后的 setNetworkTimeout 另有设置。
+        // / Login timeout: an unreachable host can hang for OS-level minutes and pin
+        // the request thread; setNetworkTimeout only applies post-connect.
+        DriverManager.setLoginTimeout(10);
         return DriverManager.getConnection(ds.getJdbcUrl(), ds.getUsername(), crypto.decrypt(ds.getEncryptedPassword()));
     }
 

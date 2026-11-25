@@ -255,9 +255,14 @@ public class KnowledgeService {
         java.util.List<Boolean> vectorResults = vectorStore.upsertBatch(staged);
         for (int i = 0; i < staged.size(); i++) {
             KnowledgeEntry entry = staged.get(i);
+            // 空内容条目直接进 skipped 终态（与单条路径一致），否则会进 vector_failed
+            // 被 reindex 无限重试——空内容永远写不出向量。/ Blank entries go straight
+            // to the terminal "skipped" state (same as the single path) instead of
+            // being retried forever by reindex.
+            boolean blank = entry.getContent() == null || entry.getContent().isBlank();
             boolean ok = i < vectorResults.size() && vectorResults.get(i);
             // 按写入结果更新双写状态机 / Update the dual-write status machine by result.
-            String finalStatus = ok ? "ready" : "vector_failed";
+            String finalStatus = blank ? "skipped" : ok ? "ready" : "vector_failed";
             repository.updateStatus(entry.getId(), finalStatus);
             entry.setStatus(finalStatus);
             addedIds.add(entry.getId());
@@ -598,7 +603,9 @@ public class KnowledgeService {
             }
             List<Boolean> results = vectorStore.upsertBatch(valid);
             for (int i = 0; i < valid.size(); i++) {
-                boolean ok = results.get(i);
+                // 向量库未就绪时 upsertBatch 返回空列表，无守卫会 IndexOutOfBounds → 500。
+                // / upsertBatch returns an empty list when the store is not ready; guard it.
+                boolean ok = i < results.size() && results.get(i);
                 repository.updateStatus(valid.get(i).getId(), ok ? "ready" : "vector_failed");
                 if (ok) success++; else failed++;
             }
@@ -612,8 +619,14 @@ public class KnowledgeService {
 
     /** 删除一条知识（同时删向量）/ Delete an entry (vector included). */
     public void delete(String id) {
-        repository.delete(id);
-        vectorStore.delete(id);
+        // 与 reindex 互斥：reindex 在「findById 复核 → upsertBatch」窗口内，
+        // 并发 delete 会产生幽灵向量（元数据已删、向量仍在）。/ Mutual exclusion
+        // with reindex: a concurrent delete inside reindex's recheck→upsert window
+        // leaves a ghost vector.
+        synchronized (reindexLock) {
+            repository.delete(id);
+            vectorStore.delete(id);
+        }
         publishChange(KnowledgeChangedEvent.ChangeType.DELETE, id);
     }
 
@@ -626,21 +639,26 @@ public class KnowledgeService {
     public boolean restore(String id) {
         KnowledgeEntry e = repository.findByIdIncludingDeleted(id);
         if (e == null || !e.isDeleted()) return false;
-        repository.restore(id);
-        // 重建倒排索引 / Rebuild inverted index.
-        repository.indexTerms(id, tokenizer.tokenize(e.getTitle() + " " + e.getContent()));
-        // 重建向量：先标记 pending，按结果更新状态 / Rebuild vector: pending first, then status by result.
-        repository.updateStatus(id, "pending");
-        boolean ok = vectorStore.upsertWithResult(e);
-        repository.updateStatus(id, ok ? "ready" : "vector_failed");
+        synchronized (reindexLock) {
+            repository.restore(id);
+            // 重建倒排索引 / Rebuild inverted index.
+            repository.indexTerms(id, tokenizer.tokenize(e.getTitle() + " " + e.getContent()));
+            // 重建向量：先标记 pending，按结果更新状态 / Rebuild vector: pending first, then status by result.
+            repository.updateStatus(id, "pending");
+            boolean ok = vectorStore.upsertWithResult(e);
+            repository.updateStatus(id, ok ? "ready" : "vector_failed");
+        }
         publishChange(KnowledgeChangedEvent.ChangeType.ADD, id);
         return true;
     }
 
     /** 按来源删除 / Delete by source ID. */
     public int deleteBySource(String sourceId) {
-        List<String> ids = repository.deleteBySource(sourceId);
-        vectorStore.deleteBySource(sourceId);
+        List<String> ids;
+        synchronized (reindexLock) {
+            ids = repository.deleteBySource(sourceId);
+            vectorStore.deleteBySource(sourceId);
+        }
         // 按实际删除 ID 增量移除图谱子图 / Incrementally remove graph subgraphs by deleted IDs.
         publishChange(KnowledgeChangedEvent.ChangeType.DELETE_BATCH, ids);
         return ids.size();

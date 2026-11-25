@@ -234,9 +234,13 @@ Docker 用 volume `axiom-data` 挂载到 `/app/data`，本地用 `backend/data/`
 ├── h2/metadata.mv.db           元数据
 ├── duckdb/analysis.duckdb      原始数据集
 ├── zvec/dataset_semantics/     数据集语义向量
-├── zvec/knowledge_base_v2/     知识库向量（含 FTS 索引）
-└── models/bge-small-zh-v1.5/   本地 embedding 模型
+└── zvec/knowledge_base_v2/     知识库向量（含 FTS 索引）
 ```
+
+> 本地 embedding 模型在镜像层 `/app/models/bge-small-zh-v1.5/`（刻意放在数据卷外，
+> 避免空卷遮蔽已下载模型），随镜像分发、不在备份范围。
+> The embedding model lives in the image layer at `/app/models/bge-small-zh-v1.5/`
+> (outside the data volume by design), ships with the image and is not backed up.
 
 `docker compose down` **不会**删除数据卷；`docker compose down -v` **会**删除（谨慎）；`clean` 只删容器和镜像，保留数据卷。
 

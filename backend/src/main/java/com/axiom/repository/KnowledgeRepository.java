@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -262,9 +263,17 @@ public class KnowledgeRepository {
     public void indexTerms(String entryId, List<String> terms) {
         jdbc.update("DELETE FROM knowledge_terms WHERE entry_id = ?", entryId);
         if (terms == null || terms.isEmpty()) return;
+        // 批量写入：中文 bigram 一块文档约产生数百 token，逐条 INSERT 会在
+        // meta 池（maxPoolSize=2）上排队放大写延迟。/ Batch insert: a single
+        // chunk yields hundreds of bigrams; per-token INSERTs queue up badly
+        // on the small metadata pool.
+        List<Object[]> batchArgs = new ArrayList<>(terms.size());
         for (String term : terms) {
             if (term == null || term.isBlank()) continue;
-            jdbc.update("INSERT INTO knowledge_terms (term, entry_id) VALUES (?, ?)", term, entryId);
+            batchArgs.add(new Object[]{term, entryId});
+        }
+        if (!batchArgs.isEmpty()) {
+            jdbc.batchUpdate("INSERT INTO knowledge_terms (term, entry_id) VALUES (?, ?)", batchArgs);
         }
     }
 

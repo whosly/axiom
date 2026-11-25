@@ -49,6 +49,12 @@ public class RerankService {
         RerankProvider provider = resolveProvider();
         List<String> texts = hits.stream().map(h -> h.getTitle() + " " + h.getContent()).toList();
         List<Double> scores = provider.score(query, texts);
+        // 重排不可用（null）：保留召回原始分数与排序直接截断，语义上等价于关闭 rerank。
+        // / Rerank unavailable (null): keep recall scores and order, equivalent to no rerank.
+        if (scores == null) {
+            log.debug("[Rerank] provider={} unavailable, keeping recall scores", provider.providerName());
+            return hits.subList(0, Math.min(topK, hits.size()));
+        }
 
         List<Hit> result = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {

@@ -194,18 +194,27 @@ public class VectorService {
     public void upsertAll(List<SemanticItem> items) {
         if (!ready || items == null || items.isEmpty()) return;
         List<Doc> docs = new ArrayList<>(items.size());
-        try {
-            for (SemanticItem item : items) {
-                if (item.text() == null || item.text().isBlank()) continue;
+        // 逐条隔离构建：一条 embed/字段填充失败只丢该条，不毒化整批——此前 try 包住
+        // 整个循环，任一条失败会丢弃全部已构建 Doc（含宽表其余字段向量），与注释承诺
+        // 相悖。/ Per-item isolation: one embed/build failure drops only that item —
+        // previously a single failure discarded the whole batch including its docs.
+        for (SemanticItem item : items) {
+            if (item.text() == null || item.text().isBlank()) continue;
+            try {
+                float[] vector = alignDimension(embeddingFactory.current().embed(item.text()));
                 Doc doc = new Doc();
                 doc.setPK(item.id());
                 doc.addStringField("text", item.text());
                 doc.addStringField("kind", item.kind());
                 doc.addStringField("refId", item.refId());
-                doc.addVectorFP32Field("embedding", alignDimension(embeddingFactory.current().embed(item.text())));
+                doc.addVectorFP32Field("embedding", vector);
                 docs.add(doc);
+            } catch (Exception e) {
+                log.warn("[Zvec] batch build failed for {}: {}", item.id(), e.getMessage());
             }
-            if (docs.isEmpty()) return;
+        }
+        if (docs.isEmpty()) return;
+        try {
             synchronized (zvecLock) {
                 collection.upsert(docs);
                 collection.flush();
@@ -213,7 +222,7 @@ public class VectorService {
         } catch (Exception e) {
             log.warn("[Zvec] batch upsert failed ({} items): {}", docs.size(), e.getMessage());
         } finally {
-            if (!docs.isEmpty()) Doc.freeDocs(docs);
+            Doc.freeDocs(docs);
         }
     }
 

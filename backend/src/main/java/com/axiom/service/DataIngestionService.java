@@ -221,7 +221,9 @@ public class DataIngestionService {
                 try {
                     parser.parse(new org.xml.sax.InputSource(sheetStream));
                 } catch (RowLimitReached stop) {
-                    throw new IOException("Excel 超过最大导入行数 " + MAX_XLSX_ROWS + "，请拆分文件后再上传");
+                    // 报错文案用本次实际生效的 maxRows（测试注入小上限时文案仍准确）。
+                    // / Report the effective maxRows, not the constant (tests inject a smaller cap).
+                    throw new IOException("Excel 超过最大导入行数 " + maxRows + "，请拆分文件后再上传");
                 }
             }
             return collector.result();
