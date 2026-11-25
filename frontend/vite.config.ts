@@ -1,7 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import os from 'node:os';
+import path from 'node:path';
 
 export default defineConfig({
+  // 依赖预构建缓存放到系统临时目录：默认 node_modules/.vite 会在锁文件/配置哈希
+  // 变化时被 vite 整目录清空，在工作区沙箱下会触发批量删除保护（文件数 > 50），
+  // 导致 dev server 启动直接失败。缓存移出工作区后不再受该保护约束。
+  // / Keep the dep-optimizer cache in the OS temp dir: vite wipes the default
+  // node_modules/.vite wholesale when the lockfile/config hash changes, which
+  // trips the workspace bulk-delete guard (>50 files) and aborts startup.
+  cacheDir: path.join(os.tmpdir(), 'axiom-vite-cache'),
   plugins: [react()],
   build: {
     rollupOptions: {
